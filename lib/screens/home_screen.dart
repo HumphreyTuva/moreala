@@ -7,6 +7,7 @@ import 'join_class_screen.dart';
 import 'my_classes_screen.dart';
 import 'payment_screen.dart';
 import 'review_queue_screen.dart';
+import 'change_password_screen.dart';
 
 /// Landing screen after login. Fetches the user's own row once (name,
 /// plan_tier) alongside their walkthroughs, so lecturer-only features
@@ -67,6 +68,7 @@ class _HomeScreenState extends State<HomeScreen> {
       await Supabase.instance.client.auth.signOut(scope: SignOutScope.local);
     }
   }
+
   @override
   Widget build(BuildContext context) {
     return Scaffold(
@@ -108,10 +110,20 @@ class _HomeScreenState extends State<HomeScreen> {
               MaterialPageRoute(builder: (_) => const JoinClassScreen()),
             ),
           ),
-          IconButton(
-            icon: const Icon(Icons.logout),
-            tooltip: 'Log out',
-            onPressed: _logout,
+          PopupMenuButton<String>(
+            onSelected: (value) {
+              if (value == 'change_password') {
+                Navigator.of(context).push(
+                  MaterialPageRoute(builder: (_) => const ChangePasswordScreen()),
+                );
+              } else if (value == 'logout') {
+                _logout();
+              }
+            },
+            itemBuilder: (context) => const [
+              PopupMenuItem(value: 'change_password', child: Text('Change password')),
+              PopupMenuItem(value: 'logout', child: Text('Log out')),
+            ],
           ),
         ],
       ),

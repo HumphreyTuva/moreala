@@ -110,8 +110,7 @@ class SupabaseService {
 
     // A new flashcard needs an initial reviews row, due immediately,
     // or it's invisible to the "Due Today" queue until it's already
-    // been reviewed once some other way — which defeats the point of
-    // a queue that's supposed to surface what's new to study.
+    // been reviewed once some other way.
     if (type == NoteType.flashcard) {
       await _client.from('reviews').insert({
         'note_id': row['id'],
@@ -170,15 +169,26 @@ class SupabaseService {
         .maybeSingle();
   }
 
+  /// Creates a new stop.
+  ///
+  /// [previousPhotoPointId] is now explicit rather than looked up
+  /// automatically — that's a deliberate change to support branching.
+  /// The old behavior (always link to whatever's globally last in the
+  /// model) breaks the moment a model has more than one line: a new
+  /// stop captured in Branch B would incorrectly get linked as if it
+  /// continued Branch A. The caller (CaptureScreen) now tracks its own
+  /// "last stop in *this* capture session" and passes it in. Pass null
+  /// to start a stop with no backward link at all — used for the
+  /// first stop of a brand-new branch (its connection to the rest of
+  /// the graph is recorded separately via photo_point_links, not
+  /// linked_prev_id).
   Future<PhotoPoint> createPhotoPointStop({
     required String modelId,
     required String forwardKey,
     required String leftKey,
     required String rightKey,
+    String? previousPhotoPointId,
   }) async {
-    final previous = await getLastPhotoPoint(modelId);
-    final nextOrderIndex = previous == null ? 0 : (previous['order_index'] as int) + 1;
-
     final row = await _client
         .from('photo_points')
         .insert({
@@ -186,17 +196,46 @@ class SupabaseService {
           'photo_url_forward': forwardKey,
           'photo_url_left': leftKey,
           'photo_url_right': rightKey,
-          'order_index': nextOrderIndex,
-          'linked_prev_id': previous?['id'],
+          // No longer required to be gapless/sequential per line now
+          // that branches exist — just needs to sort reasonably and
+          // stay unique. Millisecond timestamp does that.
+          'order_index': DateTime.now().millisecondsSinceEpoch,
+          'linked_prev_id': previousPhotoPointId,
         })
         .select()
         .single();
 
-    if (previous != null) {
-      await _client.from('photo_points').update({'linked_next_id': row['id']}).eq('id', previous['id']);
+    if (previousPhotoPointId != null) {
+      await _client
+          .from('photo_points')
+          .update({'linked_next_id': row['id']}).eq('id', previousPhotoPointId);
     }
 
     return PhotoPoint.fromJson(row);
+  }
+
+  /// Records a branch connection: "from this stop, there's also a
+  /// path (labeled e.g. 'Left doorway') leading to that stop." Kept
+  /// entirely separate from linked_prev_id/linked_next_id, which stay
+  /// scoped to a single straight line — a stop can have any number of
+  /// outgoing branch links in addition to its normal forward/back.
+  Future<void> createBranchLink({
+    required String fromPhotoPointId,
+    required String toPhotoPointId,
+    required String label,
+  }) async {
+    await _client.from('photo_point_links').insert({
+      'from_photo_point_id': fromPhotoPointId,
+      'to_photo_point_id': toPhotoPointId,
+      'label': label,
+    });
+  }
+
+  Future<List<Map<String, dynamic>>> getBranchLinksFrom(String photoPointId) async {
+    return await _client
+        .from('photo_point_links')
+        .select()
+        .eq('from_photo_point_id', photoPointId);
   }
 
   Future<String> getUploadUrl(String objectKey) async {
@@ -316,11 +355,6 @@ class SupabaseService {
 
   // ---------------- SCAN CREDITS ----------------
 
-  /// Attempts to consume one scan allowance (free monthly lecturer
-  /// scan, or a prepaid credit) for creating a new private walkthrough.
-  /// Returns false if the user has none left and needs to pay first.
-  /// This is enforced server-side via a SECURITY DEFINER function, so
-  /// a modified client can't just skip the check.
   Future<bool> consumeScanCredit() async {
     final userId = await _internalUserId();
     final result = await _client.rpc('consume_scan_credit', params: {'p_user_id': userId});
@@ -335,9 +369,6 @@ class SupabaseService {
 
   // ---------------- REVIEWS DUE TODAY ----------------
 
-  /// Fetches this note's existing review state for the current user,
-  /// or null if it's never been reviewed before. Used so repeat
-  /// reviews build on the real schedule instead of resetting each time.
   Future<Map<String, dynamic>?> getReviewState(String noteId) async {
     final userId = await _internalUserId();
     return await _client
@@ -348,16 +379,9 @@ class SupabaseService {
         .maybeSingle();
   }
 
-  /// Same as getDueReviews but joined with enough context to keep
-  /// PostgREST's embed unambiguous.
   Future<List<Map<String, dynamic>>> getDueReviewsWithContext() async {
     final userId = await _internalUserId();
     final now = DateTime.now().toIso8601String();
-    // Deliberately shallow — notes<->pins has two foreign keys
-    // (notes.pin_id and pins.note_id), which makes a nested embed
-    // through both tables ambiguous to PostgREST. Keeping this to
-    // reviews+notes only sidesteps that; the review queue doesn't
-    // strictly need the walkthrough title to function.
     return await _client
         .from('reviews')
         .select('*, notes(*)')
@@ -368,8 +392,6 @@ class SupabaseService {
 
   // ---------------- VOICE NOTES (Supabase Storage, per spec) ----------------
 
-  /// Uploads a short recording to the private voice-notes bucket.
-  /// Returns the storage path to save as the note's media_url.
   Future<String> uploadVoiceNote(Uint8List bytes) async {
     final userId = await _internalUserId();
     final path = '$userId/${DateTime.now().millisecondsSinceEpoch}.m4a';

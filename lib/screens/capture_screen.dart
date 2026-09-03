@@ -14,7 +14,20 @@ enum _CaptureStage { forward, left, right, uploading }
 
 class CaptureScreen extends StatefulWidget {
   final String modelId;
-  const CaptureScreen({super.key, required this.modelId});
+  // When set, this capture session starts a brand-new branch off an
+  // existing stop rather than continuing the main line. The new
+  // stop's connection to the graph is recorded via a labeled
+  // photo_point_links row (branchLabel), not the normal
+  // linked_prev_id/linked_next_id chain.
+  final String? branchFromPhotoPointId;
+  final String? branchLabel;
+
+  const CaptureScreen({
+    super.key,
+    required this.modelId,
+    this.branchFromPhotoPointId,
+    this.branchLabel,
+  });
 
   @override
   State<CaptureScreen> createState() => _CaptureScreenState();
@@ -27,6 +40,11 @@ class _CaptureScreenState extends State<CaptureScreen> {
   int _stopCount = 0;
   String? _error;
 
+  bool _uploadFailed = false;
+
+  String? _lastPhotoPointId;
+  bool _isFirstStopOfBranch = false;
+
   XFile? _forwardShot;
   XFile? _leftShot;
   XFile? _rightShot;
@@ -35,17 +53,19 @@ class _CaptureScreenState extends State<CaptureScreen> {
   void initState() {
     super.initState();
     _initCamera();
+    _isFirstStopOfBranch = widget.branchFromPhotoPointId != null;
     _syncStopCount();
   }
 
-  /// Without this, reopening the capture screen (after backing out or
-  /// an error) always restarted numbering stops from 0, silently
-  /// overwriting earlier stops' photos in R2. This asks the database
-  /// how many stops already exist and resumes from there.
   Future<void> _syncStopCount() async {
     final last = await _supabase.getLastPhotoPoint(widget.modelId);
     if (last != null && mounted) {
-      setState(() => _stopCount = (last['order_index'] as int) + 1);
+      setState(() {
+        _stopCount = (last['order_index'] as int) + 1;
+        if (widget.branchFromPhotoPointId == null) {
+          _lastPhotoPointId = last['id'] as String;
+        }
+      });
     }
   }
 
@@ -71,13 +91,17 @@ class _CaptureScreenState extends State<CaptureScreen> {
   }
 
   String get _promptText {
+    if (_uploadFailed) return 'Upload failed — check your connection and retry';
+    final branchPrefix = widget.branchFromPhotoPointId != null
+        ? '[${widget.branchLabel ?? "Branch"}] '
+        : '';
     switch (_stage) {
       case _CaptureStage.forward:
-        return 'Stop ${_stopCount + 1} — face forward, then tap capture';
+        return '$branchPrefix''Stop ${_stopCount + 1} — face forward, then tap capture';
       case _CaptureStage.left:
-        return 'Now turn left, then tap capture';
+        return '$branchPrefix''Now turn left, then tap capture';
       case _CaptureStage.right:
-        return 'Now turn right, then tap capture';
+        return '$branchPrefix''Now turn right, then tap capture';
       case _CaptureStage.uploading:
         return 'Saving this stop…';
     }
@@ -113,10 +137,6 @@ class _CaptureScreenState extends State<CaptureScreen> {
     }
   }
 
-  /// Lets the student redo whichever shot they're currently reviewing,
-  /// without losing earlier shots in this same stop. Only shown after
-  /// at least one shot has been taken (there's nothing to retake before
-  /// the Forward photo exists).
   void _retake(_CaptureStage stageToRetake) {
     setState(() {
       switch (stageToRetake) {
@@ -139,21 +159,34 @@ class _CaptureScreenState extends State<CaptureScreen> {
   }
 
   Future<void> _uploadStopAndAdvance() async {
+    setState(() => _uploadFailed = false);
     try {
       final forwardKey = 'models/${widget.modelId}/${_stopCount}_forward.jpg';
       final leftKey = 'models/${widget.modelId}/${_stopCount}_left.jpg';
       final rightKey = 'models/${widget.modelId}/${_stopCount}_right.jpg';
 
-      await _uploadOne(_forwardShot!, forwardKey);
-      await _uploadOne(_leftShot!, leftKey);
-      await _uploadOne(_rightShot!, rightKey);
+      await _uploadOneWithRetry(_forwardShot!, forwardKey);
+      await _uploadOneWithRetry(_leftShot!, leftKey);
+      await _uploadOneWithRetry(_rightShot!, rightKey);
 
-      await _supabase.createPhotoPointStop(
+      final newStop = await _supabase.createPhotoPointStop(
         modelId: widget.modelId,
         forwardKey: forwardKey,
         leftKey: leftKey,
         rightKey: rightKey,
+        previousPhotoPointId: _lastPhotoPointId,
       );
+
+      if (_isFirstStopOfBranch && widget.branchFromPhotoPointId != null) {
+        await _supabase.createBranchLink(
+          fromPhotoPointId: widget.branchFromPhotoPointId!,
+          toPhotoPointId: newStop.id,
+          label: widget.branchLabel ?? 'Branch',
+        );
+        _isFirstStopOfBranch = false;
+      }
+
+      _lastPhotoPointId = newStop.id;
 
       setState(() {
         _stopCount += 1;
@@ -163,28 +196,30 @@ class _CaptureScreenState extends State<CaptureScreen> {
         _stage = _CaptureStage.forward;
       });
     } catch (e) {
-      // On failure, drop back to the Forward stage for THIS stop
-      // rather than leaving the UI stuck on "uploading" — the student
-      // can just redo all three shots for this stop and try again.
       setState(() {
-        _error = 'Upload failed: $e';
-        _stage = _CaptureStage.forward;
-        _forwardShot = null;
-        _leftShot = null;
-        _rightShot = null;
+        _uploadFailed = true;
+        _error = 'Upload failed after retries: $e';
       });
     }
   }
 
-  /// Compresses/resizes before upload — brings file size down toward
-  /// the spec's ~150-300KB target (still JPEG, not WebP; Dart's `image`
-  /// package doesn't encode WebP, only decode it — true WebP output
-  /// would need a platform channel or server-side conversion, flagged
-  /// here rather than silently left out).
+  Future<void> _uploadOneWithRetry(XFile file, String objectKey) async {
+    const maxAttempts = 3;
+    for (var attempt = 1; attempt <= maxAttempts; attempt++) {
+      try {
+        await _uploadOne(file, objectKey);
+        return;
+      } catch (e) {
+        if (attempt == maxAttempts) rethrow;
+        await Future.delayed(Duration(seconds: attempt * 2));
+      }
+    }
+  }
+
   Future<Uint8List> _compress(XFile file) async {
     final bytes = await file.readAsBytes();
     final decoded = img.decodeImage(bytes);
-    if (decoded == null) return bytes; // fall back to original if decode fails
+    if (decoded == null) return bytes;
 
     final resized = decoded.width > 1280
         ? img.copyResize(decoded, width: 1280)
@@ -216,7 +251,7 @@ class _CaptureScreenState extends State<CaptureScreen> {
 
   @override
   Widget build(BuildContext context) {
-    if (_error != null) {
+    if (_error != null && !_uploadFailed) {
       return Scaffold(
         body: Center(
           child: Padding(
@@ -240,7 +275,7 @@ class _CaptureScreenState extends State<CaptureScreen> {
       return const Scaffold(body: Center(child: CircularProgressIndicator()));
     }
 
-    final isUploading = _stage == _CaptureStage.uploading;
+    final isUploading = _stage == _CaptureStage.uploading && !_uploadFailed;
 
     return Scaffold(
       backgroundColor: Colors.black,
@@ -248,7 +283,6 @@ class _CaptureScreenState extends State<CaptureScreen> {
         children: [
           Positioned.fill(child: CameraPreview(_controller!)),
 
-          // Thumbnails of shots taken so far this stop — tap one to retake it
           Positioned(
             top: 48,
             right: 16,
@@ -273,9 +307,14 @@ class _CaptureScreenState extends State<CaptureScreen> {
               children: [
                 Text(
                   _promptText,
-                  style: const TextStyle(color: Colors.white, fontSize: 16, fontWeight: FontWeight.w600),
+                  style: TextStyle(
+                    color: _uploadFailed ? Colors.orangeAccent : Colors.white,
+                    fontSize: 16,
+                    fontWeight: FontWeight.w600,
+                  ),
                 ),
                 if (!isUploading &&
+                    !_uploadFailed &&
                     (_forwardShot != null || _leftShot != null || _rightShot != null))
                   const Padding(
                     padding: EdgeInsets.only(top: 4),
@@ -292,23 +331,34 @@ class _CaptureScreenState extends State<CaptureScreen> {
             right: 0,
             child: Column(
               children: [
-                Center(
-                  child: isUploading
-                      ? const CircularProgressIndicator(color: Colors.white)
-                      : GestureDetector(
-                          onTap: _capture,
-                          child: Container(
-                            width: 72,
-                            height: 72,
-                            decoration: BoxDecoration(
-                              shape: BoxShape.circle,
-                              border: Border.all(color: Colors.white, width: 4),
+                if (_uploadFailed)
+                  ElevatedButton.icon(
+                    onPressed: _uploadStopAndAdvance,
+                    icon: const Icon(Icons.refresh),
+                    label: const Text('Retry upload'),
+                    style: ElevatedButton.styleFrom(backgroundColor: Colors.orangeAccent),
+                  )
+                else
+                  Center(
+                    child: isUploading
+                        ? const CircularProgressIndicator(color: Colors.white)
+                        : GestureDetector(
+                            onTap: _capture,
+                            child: Container(
+                              width: 72,
+                              height: 72,
+                              decoration: BoxDecoration(
+                                shape: BoxShape.circle,
+                                border: Border.all(color: Colors.white, width: 4),
+                              ),
                             ),
                           ),
-                        ),
-                ),
+                  ),
                 const SizedBox(height: 20),
-                if (!isUploading && _stage == _CaptureStage.forward && _stopCount > 0)
+                if (!isUploading &&
+                    !_uploadFailed &&
+                    _stage == _CaptureStage.forward &&
+                    _stopCount > 0)
                   TextButton(
                     onPressed: _finishWalkthrough,
                     child: Text('Finish walkthrough ($_stopCount stops captured)',

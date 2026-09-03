@@ -7,13 +7,13 @@ import '../services/local_cache_service.dart';
 import '../widgets/directional_nav_arrows.dart';
 import '../widgets/pin_marker.dart';
 import 'pin_hud_panel.dart';
+import 'capture_screen.dart';
 
 /// The core Matterport-style walkthrough screen: renders the current
 /// photo_point's image for the active look direction, spatial pins
-/// overlaid on it, and directional nav arrows. Tapping an arrow moves
-/// to the next node (Forward) or changes look direction (Left/Right)
-/// with a short pan/blur transition — never a hard cut, and never
-/// auto-advancing (pacing is fully student-controlled per the spec).
+/// overlaid on it, directional nav arrows, and any labeled branches
+/// leading off from this stop, plus a way for the owner to start a
+/// brand-new branch from here.
 class WalkthroughScreen extends StatefulWidget {
   final String modelId;
   const WalkthroughScreen({super.key, required this.modelId});
@@ -31,10 +31,11 @@ class _WalkthroughScreenState extends State<WalkthroughScreen>
   int _currentIndex = 0;
   LookDirection _direction = LookDirection.forward;
   List<SpatialPin> _pins = [];
+  List<Map<String, dynamic>> _branches = [];
   bool _loading = true;
 
   late final AnimationController _transitionController;
-  static const _transitionDuration = Duration(milliseconds: 250); // 200-300ms per spec
+  static const _transitionDuration = Duration(milliseconds: 250);
 
   @override
   void initState() {
@@ -55,7 +56,31 @@ class _WalkthroughScreenState extends State<WalkthroughScreen>
       _points = points;
       _loading = false;
     });
-    if (points.isNotEmpty) _loadPinsForCurrent();
+    if (points.isNotEmpty) {
+      _loadPinsForCurrent();
+      _loadBranchesForCurrent();
+    }
+  }
+
+  /// Reloads the node list and returns to a SPECIFIC stop by its id —
+  /// not by whatever numeric index it happened to be at before. The
+  /// list gets rebuilt and reordered on reload (new branch stops get
+  /// appended), so reusing the old index is fragile: it can silently
+  /// land you on a completely different stop that happens to occupy
+  /// the same position afterward. Matching by id is always correct
+  /// regardless of how the list reorders.
+  Future<void> _reloadAndReturnTo(String photoPointId) async {
+    final points = await _supabase.getPhotoPoints(widget.modelId);
+    final idx = points.indexWhere((p) => p.id == photoPointId);
+    setState(() {
+      _points = points;
+      _currentIndex = idx == -1 ? 0 : idx;
+      _direction = LookDirection.forward;
+    });
+    if (points.isNotEmpty) {
+      _loadPinsForCurrent();
+      _loadBranchesForCurrent();
+    }
   }
 
   Future<void> _loadPinsForCurrent() async {
@@ -63,13 +88,14 @@ class _WalkthroughScreenState extends State<WalkthroughScreen>
     if (mounted) setState(() => _pins = pins);
   }
 
+  Future<void> _loadBranchesForCurrent() async {
+    final branches = await _supabase.getBranchLinksFrom(_points[_currentIndex].id);
+    if (mounted) setState(() => _branches = branches);
+  }
+
   PhotoPoint get _current => _points[_currentIndex];
 
   Future<void> _playTransitionThen(VoidCallback change) async {
-    // Lightweight pan/motion-blur scale transition. Kept as a simple
-    // scale+fade rather than a real blur shader — blur shaders are
-    // costly on low-end Android devices, which is the likely device
-    // profile for this app given the pricing model.
     await _transitionController.forward(from: 0);
     setState(change);
     await _transitionController.reverse();
@@ -82,7 +108,10 @@ class _WalkthroughScreenState extends State<WalkthroughScreen>
     _playTransitionThen(() {
       _currentIndex = nextIdx;
       _direction = LookDirection.forward;
-    }).then((_) => _loadPinsForCurrent());
+    }).then((_) {
+      _loadPinsForCurrent();
+      _loadBranchesForCurrent();
+    });
   }
 
   void _moveBackward() {
@@ -92,7 +121,22 @@ class _WalkthroughScreenState extends State<WalkthroughScreen>
     _playTransitionThen(() {
       _currentIndex = prevIdx;
       _direction = LookDirection.forward;
-    }).then((_) => _loadPinsForCurrent());
+    }).then((_) {
+      _loadPinsForCurrent();
+      _loadBranchesForCurrent();
+    });
+  }
+
+  void _jumpToBranch(String toPhotoPointId) {
+    final idx = _points.indexWhere((p) => p.id == toPhotoPointId);
+    if (idx == -1) return;
+    _playTransitionThen(() {
+      _currentIndex = idx;
+      _direction = LookDirection.forward;
+    }).then((_) {
+      _loadPinsForCurrent();
+      _loadBranchesForCurrent();
+    });
   }
 
   void _lookLeft() {
@@ -108,13 +152,11 @@ class _WalkthroughScreenState extends State<WalkthroughScreen>
       context: context,
       isScrollControlled: true,
       backgroundColor: Colors.transparent,
-      // Stays open until the student closes it — no auto-dismiss timer,
-      // per the "pacing is fully user-controlled" requirement.
       builder: (_) => PinHudPanel(pin: pin),
     );
   }
 
-    Future<void> _onPhotoLongPress(Offset localPosition, Size photoSize) async {
+  Future<void> _onPhotoLongPress(Offset localPosition, Size photoSize) async {
     final x = localPosition.dx / photoSize.width;
     final y = localPosition.dy / photoSize.height;
     try {
@@ -133,6 +175,50 @@ class _WalkthroughScreenState extends State<WalkthroughScreen>
     }
   }
 
+  Future<void> _startBranchHere() async {
+    final labelController = TextEditingController();
+    final label = await showDialog<String>(
+      context: context,
+      builder: (context) => AlertDialog(
+        title: const Text('Start a new branch'),
+        content: TextField(
+          controller: labelController,
+          autofocus: true,
+          decoration: const InputDecoration(hintText: 'e.g. Left doorway'),
+        ),
+        actions: [
+          TextButton(
+            onPressed: () => Navigator.of(context).pop(),
+            child: const Text('Cancel'),
+          ),
+          ElevatedButton(
+            onPressed: () => Navigator.of(context).pop(labelController.text.trim()),
+            child: const Text('Continue'),
+          ),
+        ],
+      ),
+    );
+
+    if (label == null || label.isEmpty || !mounted) return;
+
+    // Remember exactly which stop we're branching from, BY ID, so we
+    // can return to that same physical spot afterward regardless of
+    // how the reloaded list reorders itself.
+    final originalStopId = _current.id;
+
+    await Navigator.of(context).push(
+      MaterialPageRoute(
+        builder: (_) => CaptureScreen(
+          modelId: widget.modelId,
+          branchFromPhotoPointId: originalStopId,
+          branchLabel: label,
+        ),
+      ),
+    );
+
+    await _reloadAndReturnTo(originalStopId);
+  }
+
   @override
   Widget build(BuildContext context) {
     if (_loading) return const Scaffold(body: Center(child: CircularProgressIndicator()));
@@ -148,7 +234,6 @@ class _WalkthroughScreenState extends State<WalkthroughScreen>
             final photoSize = Size(constraints.maxWidth, constraints.maxHeight);
             return Stack(
               children: [
-                // Photo layer with fade/scale transition
                 AnimatedBuilder(
                   animation: _transitionController,
                   builder: (context, child) {
@@ -170,14 +255,33 @@ class _WalkthroughScreenState extends State<WalkthroughScreen>
                   ),
                 ),
 
-                // Pin overlay
                 ..._pins.map((pin) => Positioned(
                       left: pin.x * photoSize.width - 20,
                       top: pin.y * photoSize.height - 20,
                       child: PinMarker(onTap: () => _onPinTapped(pin)),
                     )),
 
-                // Directional nav arrows
+                if (_branches.isNotEmpty)
+                  Positioned(
+                    bottom: 220,
+                    left: 0,
+                    right: 0,
+                    child: Center(
+                      child: Wrap(
+                        spacing: 8,
+                        children: _branches.map((b) {
+                          return ActionChip(
+                            backgroundColor: Colors.black54,
+                            label: Text(b['label'] ?? 'Branch',
+                                style: const TextStyle(color: Colors.cyanAccent)),
+                            avatar: const Icon(Icons.call_split, color: Colors.cyanAccent, size: 16),
+                            onPressed: () => _jumpToBranch(b['to_photo_point_id']),
+                          );
+                        }).toList(),
+                      ),
+                    ),
+                  ),
+
                 DirectionalNavArrows(
                   canMoveForward: _current.linkedNextId != null,
                   canMoveBackward: _current.linkedPrevId != null,
@@ -185,6 +289,16 @@ class _WalkthroughScreenState extends State<WalkthroughScreen>
                   onBackward: _moveBackward,
                   onLookLeft: _lookLeft,
                   onLookRight: _lookRight,
+                ),
+
+                Positioned(
+                  top: 16,
+                  right: 16,
+                  child: IconButton(
+                    icon: const Icon(Icons.call_split, color: Colors.white70),
+                    tooltip: 'Start a branch from here',
+                    onPressed: _startBranchHere,
+                  ),
                 ),
               ],
             );
@@ -195,8 +309,6 @@ class _WalkthroughScreenState extends State<WalkthroughScreen>
   }
 }
 
-/// Loads (from local cache first, falling back to a signed R2 URL) and
-/// displays the photo for the current point + look direction.
 class _WalkthroughPhoto extends StatelessWidget {
   final String modelId;
   final PhotoPoint photoPoint;
