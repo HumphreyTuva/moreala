@@ -254,6 +254,39 @@ class SupabaseService {
     await _client.from('models').update({'status': 'ready'}).eq('id', modelId);
   }
 
+
+  Future<void> deleteModel(String modelId) async {
+    // RLS's models_delete_own policy already restricts this to the
+    // owner. The schema's `on delete cascade` foreign keys take care
+    // of cleaning up photo_points, pins, notes, reviews, and any
+    // class tied to this model — but NOT the actual files sitting in
+    // R2/Cloudflare, which become orphaned. That's a known, small
+    // cost at this scale, not something silently "handled."
+    await _client.from('models').delete().eq('id', modelId);
+  }
+
+  /// Triggers server-side keyframe extraction for a just-uploaded raw
+  /// video. Returns immediately once the worker has ACCEPTED the job
+  /// (202) — actual processing happens in the background. Poll
+  /// getModel(modelId) afterward and watch its `status` field for
+  /// 'ready' or 'failed'.
+  Future<void> triggerExtraction({
+    required String modelId,
+    required String rawVideoObjectKey,
+  }) async {
+    final response = await _client.functions.invoke(
+      'trigger-extraction',
+      body: {'model_id': modelId, 'raw_video_object_key': rawVideoObjectKey},
+    );
+    if (response.status != 200) {
+      throw Exception(
+        response.data?['error'] ?? 'Failed to trigger extraction (status ${response.status})',
+      );
+    }
+  }
+
+
+
   // ---------------- NOTES (view/create for a pin) ----------------
 
   Future<StudyNote?> getNoteById(String noteId) async {

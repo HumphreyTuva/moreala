@@ -12,7 +12,9 @@ dependencies:
   supabase_flutter: ^2.5.0
   path_provider: ^2.1.3
   http: ^1.2.1
-  camera: ^0.11.0                # live walkthrough video capture
+  camera: ^0.11.0   
+  video_thumbnail: ^0.5.3        # on-device frame extraction (no ffmpeg, no server needed)
+  video_player: ^2.9.1             # only used briefly to read the recorded video's duration             # live walkthrough video capture
   image: ^4.2.0                  # client-side resize/compress before R2 upload
   record: ^6.2.1                 # audio note recording
   audioplayers: ^6.1.0            # audio note playback

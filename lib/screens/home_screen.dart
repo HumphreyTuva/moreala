@@ -8,13 +8,8 @@ import 'my_classes_screen.dart';
 import 'payment_screen.dart';
 import 'review_queue_screen.dart';
 import 'change_password_screen.dart';
+import '../services/supabase_service.dart';
 
-/// Landing screen after login. Fetches the user's own row once (name,
-/// plan_tier) alongside their walkthroughs, so lecturer-only features
-/// (creating class codes) are gated the way the spec's tier table
-/// describes — the blueprint only defines Free Student vs Lecturer
-/// Pro via `users.plan_tier`; there is no separate "admin" role in
-/// the spec, so that distinction isn't invented here.
 class HomeScreen extends StatefulWidget {
   const HomeScreen({super.key});
 
@@ -23,6 +18,7 @@ class HomeScreen extends StatefulWidget {
 }
 
 class _HomeScreenState extends State<HomeScreen> {
+  final _supabase = SupabaseService();
   late Future<_HomeData> _dataFuture;
 
   @override
@@ -60,12 +56,43 @@ class _HomeScreenState extends State<HomeScreen> {
     try {
       await Supabase.instance.client.auth.signOut();
     } catch (_) {
-      // If the session is already broken/expired (e.g. after a
-      // password-recovery session expired mid-use), a normal sign-out
-      // can fail trying to invalidate it server-side. Falling back to
-      // a LOCAL-only sign-out guarantees the user can always escape
-      // back to the login screen regardless of session state.
       await Supabase.instance.client.auth.signOut(scope: SignOutScope.local);
+    }
+  }
+
+  Future<void> _confirmDelete(Map<String, dynamic> model) async {
+    final confirmed = await showDialog<bool>(
+      context: context,
+      builder: (context) => AlertDialog(
+        title: const Text('Delete this walkthrough?'),
+        content: Text(
+          '"${model['title']}" and every pin, note, and stop inside it will be permanently deleted. This can\'t be undone.',
+        ),
+        actions: [
+          TextButton(
+            onPressed: () => Navigator.of(context).pop(false),
+            child: const Text('Cancel'),
+          ),
+          ElevatedButton(
+            onPressed: () => Navigator.of(context).pop(true),
+            style: ElevatedButton.styleFrom(backgroundColor: Colors.redAccent),
+            child: const Text('Delete'),
+          ),
+        ],
+      ),
+    );
+
+    if (confirmed == true) {
+      try {
+        await _supabase.deleteModel(model['id']);
+        _refresh();
+      } catch (e) {
+        if (mounted) {
+          ScaffoldMessenger.of(context).showSnackBar(
+            SnackBar(content: Text('Could not delete: $e')),
+          );
+        }
+      }
     }
   }
 
@@ -179,6 +206,11 @@ class _HomeScreenState extends State<HomeScreen> {
                   title: Text(m['title'] ?? 'Untitled'),
                   subtitle: Text(
                     '${m['campus_location'] ?? 'No location set'} · ${m['status']}',
+                  ),
+                  trailing: IconButton(
+                    icon: const Icon(Icons.delete_outline, color: Colors.redAccent),
+                    tooltip: 'Delete',
+                    onPressed: () => _confirmDelete(m),
                   ),
                   onTap: () {
                     Navigator.of(context).push(
