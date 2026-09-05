@@ -96,6 +96,71 @@ class _HomeScreenState extends State<HomeScreen> {
     }
   }
 
+  Future<void> _editModel(Map<String, dynamic> model) async {
+    final titleController = TextEditingController(text: model['title'] ?? '');
+    final locationController = TextEditingController(text: model['campus_location'] ?? '');
+    bool isShared = model['is_shared'] == true;
+
+    final saved = await showDialog<bool>(
+      context: context,
+      builder: (context) => StatefulBuilder(
+        builder: (context, setDialogState) => AlertDialog(
+          title: const Text('Edit Walkthrough'),
+          content: Column(
+            mainAxisSize: MainAxisSize.min,
+            children: [
+              TextField(
+                controller: titleController,
+                decoration: const InputDecoration(labelText: 'Title'),
+              ),
+              const SizedBox(height: 12),
+              TextField(
+                controller: locationController,
+                decoration: const InputDecoration(labelText: 'Campus location'),
+              ),
+              const SizedBox(height: 12),
+              SwitchListTile(
+                contentPadding: EdgeInsets.zero,
+                title: const Text('Shared with other students'),
+                value: isShared,
+                onChanged: (v) => setDialogState(() => isShared = v),
+              ),
+            ],
+          ),
+          actions: [
+            TextButton(
+              onPressed: () => Navigator.of(context).pop(false),
+              child: const Text('Cancel'),
+            ),
+            ElevatedButton(
+              onPressed: () => Navigator.of(context).pop(true),
+              child: const Text('Save'),
+            ),
+          ],
+        ),
+      ),
+    );
+
+    if (saved == true) {
+      try {
+        await _supabase.updateModel(
+          modelId: model['id'],
+          title: titleController.text.trim(),
+          campusLocation: locationController.text.trim().isEmpty ? null : locationController.text.trim(),
+          isShared: isShared,
+        );
+        _refresh();
+      } catch (e) {
+        if (mounted) {
+          ScaffoldMessenger.of(context).showSnackBar(
+            SnackBar(content: Text('Could not save changes: $e')),
+          );
+        }
+      }
+    }
+  }
+
+
   @override
   Widget build(BuildContext context) {
     return Scaffold(
@@ -210,11 +275,25 @@ class _HomeScreenState extends State<HomeScreen> {
                   subtitle: Text(
                     '${m['campus_location'] ?? 'No location set'} · ${m['status']}',
                   ),
-                  trailing: IconButton(
-                    icon: const Icon(Icons.delete_outline, color: Colors.redAccent),
-                    tooltip: 'Delete',
-                    onPressed: () => _confirmDelete(m),
+
+
+                                    trailing: Row(
+                    mainAxisSize: MainAxisSize.min,
+                    children: [
+                      IconButton(
+                        icon: const Icon(Icons.edit_outlined, color: Colors.white70),
+                        tooltip: 'Edit',
+                        onPressed: () => _editModel(m),
+                      ),
+                      IconButton(
+                        icon: const Icon(Icons.delete_outline, color: Colors.redAccent),
+                        tooltip: 'Delete',
+                        onPressed: () => _confirmDelete(m),
+                      ),
+                    ],
                   ),
+
+
                   onTap: () {
                     Navigator.of(context).push(
                       MaterialPageRoute(

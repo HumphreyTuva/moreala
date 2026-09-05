@@ -45,6 +45,35 @@ class SupabaseService {
     return cachedStamp == null || serverUpdatedAt.isAfter(cachedStamp);
   }
 
+  /// Edits a walkthrough's title/location/sharing after the fact —
+  /// previously a typo meant deleting and starting over.
+  Future<void> updateModel({
+    required String modelId,
+    required String title,
+    String? campusLocation,
+    required bool isShared,
+  }) async {
+    await _client.from('models').update({
+      'title': title,
+      'campus_location': campusLocation,
+      'is_shared': isShared,
+    }).eq('id', modelId);
+  }
+
+  Future<void> deleteModel(String modelId) async {
+    // Clean up the actual R2 files first (best-effort — the edge
+    // function itself won't block deletion over a cleanup failure).
+    // The schema's `on delete cascade` foreign keys then take care of
+    // photo_points, pins, notes, reviews, and any class tied to this
+    // model when the row itself is deleted below.
+    try {
+      await _client.functions.invoke('delete-model-media', body: {'model_id': modelId});
+    } catch (_) {
+      // Non-fatal — proceed with deleting the model row regardless.
+    }
+    await _client.from('models').delete().eq('id', modelId);
+  }
+
   // ---------------- PHOTO POINTS (node graph) ----------------
 
   Future<List<PhotoPoint>> getPhotoPoints(String modelId) async {
@@ -83,6 +112,13 @@ class SupabaseService {
     return SpatialPin.fromJson(row);
   }
 
+  Future<void> deletePin(String pinId, {String? noteId}) async {
+    if (noteId != null) {
+      await _client.from('notes').delete().eq('id', noteId);
+    }
+    await _client.from('pins').delete().eq('id', pinId);
+  }
+
   // ---------------- NOTES ----------------
 
   Future<StudyNote> createNote({
@@ -108,9 +144,6 @@ class SupabaseService {
       await _client.from('pins').update({'note_id': row['id']}).eq('id', pinId);
     }
 
-    // A new flashcard needs an initial reviews row, due immediately,
-    // or it's invisible to the "Due Today" queue until it's already
-    // been reviewed once some other way.
     if (type == NoteType.flashcard) {
       await _client.from('reviews').insert({
         'note_id': row['id'],
@@ -123,6 +156,13 @@ class SupabaseService {
     }
 
     return StudyNote.fromJson(row);
+  }
+
+  /// Edits an existing text or flashcard note's content in place —
+  /// previously the only way to fix a typo was delete-and-recreate.
+  /// Not offered for audio notes (there's nothing text-based to edit).
+  Future<void> updateNoteContent(String noteId, Map<String, dynamic> content) async {
+    await _client.from('notes').update({'content': content}).eq('id', noteId);
   }
 
   // ---------------- REVIEWS (SM-2 due queue) ----------------
@@ -157,7 +197,7 @@ class SupabaseService {
     }, onConflict: 'note_id,user_id');
   }
 
-  // ---------------- CAPTURE (stop-and-shoot walkthrough building) ----------------
+  // ---------------- CAPTURE (stop-and-shoot / video walkthrough building) ----------------
 
   Future<Map<String, dynamic>?> getLastPhotoPoint(String modelId) async {
     return await _client
@@ -169,19 +209,6 @@ class SupabaseService {
         .maybeSingle();
   }
 
-  /// Creates a new stop.
-  ///
-  /// [previousPhotoPointId] is now explicit rather than looked up
-  /// automatically — that's a deliberate change to support branching.
-  /// The old behavior (always link to whatever's globally last in the
-  /// model) breaks the moment a model has more than one line: a new
-  /// stop captured in Branch B would incorrectly get linked as if it
-  /// continued Branch A. The caller (CaptureScreen) now tracks its own
-  /// "last stop in *this* capture session" and passes it in. Pass null
-  /// to start a stop with no backward link at all — used for the
-  /// first stop of a brand-new branch (its connection to the rest of
-  /// the graph is recorded separately via photo_point_links, not
-  /// linked_prev_id).
   Future<PhotoPoint> createPhotoPointStop({
     required String modelId,
     required String forwardKey,
@@ -196,9 +223,6 @@ class SupabaseService {
           'photo_url_forward': forwardKey,
           'photo_url_left': leftKey,
           'photo_url_right': rightKey,
-          // No longer required to be gapless/sequential per line now
-          // that branches exist — just needs to sort reasonably and
-          // stay unique. Millisecond timestamp does that.
           'order_index': DateTime.now().millisecondsSinceEpoch,
           'linked_prev_id': previousPhotoPointId,
         })
@@ -214,11 +238,6 @@ class SupabaseService {
     return PhotoPoint.fromJson(row);
   }
 
-  /// Records a branch connection: "from this stop, there's also a
-  /// path (labeled e.g. 'Left doorway') leading to that stop." Kept
-  /// entirely separate from linked_prev_id/linked_next_id, which stay
-  /// scoped to a single straight line — a stop can have any number of
-  /// outgoing branch links in addition to its normal forward/back.
   Future<void> createBranchLink({
     required String fromPhotoPointId,
     required String toPhotoPointId,
@@ -253,51 +272,6 @@ class SupabaseService {
   Future<void> markModelReady(String modelId) async {
     await _client.from('models').update({'status': 'ready'}).eq('id', modelId);
   }
-
-
-  Future<void> deleteModel(String modelId) async {
-    // RLS's models_delete_own policy already restricts this to the
-    // owner. The schema's `on delete cascade` foreign keys take care
-    // of cleaning up photo_points, pins, notes, reviews, and any
-    // class tied to this model — but NOT the actual files sitting in
-    // R2/Cloudflare, which become orphaned. That's a known, small
-    // cost at this scale, not something silently "handled."
-    await _client.from('models').delete().eq('id', modelId);
-  }
-
-
-  Future<void> deletePin(String pinId, {String? noteId}) async {
-    // Delete the note first (if one exists) — deleting the pin alone
-    // would leave an orphaned note row nothing points to. RLS's
-    // notes_delete_own / pins_delete_own policies already restrict
-    // each to their respective owner.
-    if (noteId != null) {
-      await _client.from('notes').delete().eq('id', noteId);
-    }
-    await _client.from('pins').delete().eq('id', pinId);
-  }
-
-  /// Triggers server-side keyframe extraction for a just-uploaded raw
-  /// video. Returns immediately once the worker has ACCEPTED the job
-  /// (202) — actual processing happens in the background. Poll
-  /// getModel(modelId) afterward and watch its `status` field for
-  /// 'ready' or 'failed'.
-  Future<void> triggerExtraction({
-    required String modelId,
-    required String rawVideoObjectKey,
-  }) async {
-    final response = await _client.functions.invoke(
-      'trigger-extraction',
-      body: {'model_id': modelId, 'raw_video_object_key': rawVideoObjectKey},
-    );
-    if (response.status != 200) {
-      throw Exception(
-        response.data?['error'] ?? 'Failed to trigger extraction (status ${response.status})',
-      );
-    }
-  }
-
-
 
   // ---------------- NOTES (view/create for a pin) ----------------
 
@@ -344,22 +318,28 @@ class SupabaseService {
         .single();
   }
 
+  /// Toggles a class active/inactive rather than deleting outright —
+  /// students who already joined keep their history, but the class
+  /// stops being joinable/usable while inactive. See deleteClass for
+  /// permanent removal.
+  Future<void> setClassActive(String classId, bool isActive) async {
+    await _client.from('classes').update({'is_active': isActive}).eq('id', classId);
+  }
+
+  Future<void> deleteClass(String classId) async {
+    // class_members cascades on delete per the schema, so the roster
+    // goes with it — this is a genuine permanent delete, not a soft
+    // deactivate. setClassActive is the safer default for "I'm done
+    // teaching this" — this is for "I created this by mistake."
+    await _client.from('classes').delete().eq('id', classId);
+  }
+
   Future<List<Map<String, dynamic>>> getClassRoster(String classId) async {
     return await _client
         .from('class_members')
         .select('joined_at, users(name, email)')
         .eq('class_id', classId)
         .order('joined_at');
-  }
-
-
-    Future<List<Map<String, dynamic>>> getJoinedClasses() async {
-    final userId = await _internalUserId();
-    return await _client
-        .from('class_members')
-        .select('joined_at, classes(id, class_code, is_active, model_id, models(title))')
-        .eq('user_id', userId)
-        .order('joined_at', ascending: false);
   }
 
   // ---------------- CLASSES ----------------
@@ -380,6 +360,15 @@ class SupabaseService {
     }, onConflict: 'class_id,user_id');
 
     return classRow;
+  }
+
+  Future<List<Map<String, dynamic>>> getJoinedClasses() async {
+    final userId = await _internalUserId();
+    return await _client
+        .from('class_members')
+        .select('joined_at, classes(id, class_code, is_active, model_id, models(title))')
+        .eq('user_id', userId)
+        .order('joined_at', ascending: false);
   }
 
   // ---------------- PAYMENTS (M-Pesa) ----------------
@@ -457,4 +446,8 @@ class SupabaseService {
   Future<String> getVoiceNoteSignedUrl(String path) async {
     return await _client.storage.from('voice-notes').createSignedUrl(path, 60 * 10);
   }
+
+  // ---------------- VIDEO CAPTURE (on-device extraction) ----------------
+  // (No new methods needed — uses getUploadUrl, createPhotoPointStop,
+  // and markModelReady, all already defined above.)
 }

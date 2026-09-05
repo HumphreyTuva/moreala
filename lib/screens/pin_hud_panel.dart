@@ -41,6 +41,11 @@ class _PinHudPanelState extends State<PinHudPanel> {
   final _player = AudioPlayer();
   bool _isPlaying = false;
 
+  bool _isEditing = false;
+  final _editBodyController = TextEditingController();
+  final _editQuestionController = TextEditingController();
+  final _editAnswerController = TextEditingController();
+
   @override
   void initState() {
     super.initState();
@@ -57,6 +62,9 @@ class _PinHudPanelState extends State<PinHudPanel> {
     _answerController.dispose();
     _recorder.dispose();
     _player.dispose();
+    _editBodyController.dispose();
+    _editQuestionController.dispose();
+    _editAnswerController.dispose();
     super.dispose();
   }
 
@@ -179,6 +187,31 @@ class _PinHudPanelState extends State<PinHudPanel> {
     if (confirmed == true) {
       await _supabase.deletePin(widget.pin.id, noteId: widget.pin.noteId);
       if (mounted) Navigator.of(context).pop();
+    }
+  }
+
+    void _startEditing() {
+    if (_note!.type == NoteType.text) {
+      _editBodyController.text = _note!.content['body'] ?? '';
+    } else if (_note!.type == NoteType.flashcard) {
+      _editQuestionController.text = _note!.content['question'] ?? '';
+      _editAnswerController.text = _note!.content['answer'] ?? '';
+    }
+    setState(() => _isEditing = true);
+  }
+
+  Future<void> _saveEdit() async {
+    final content = _note!.type == NoteType.flashcard
+        ? {'question': _editQuestionController.text.trim(), 'answer': _editAnswerController.text.trim()}
+        : {'body': _editBodyController.text.trim()};
+
+    await _supabase.updateNoteContent(_note!.id, content);
+    final refreshed = await _supabase.getNoteById(_note!.id);
+    if (mounted) {
+      setState(() {
+        _note = refreshed;
+        _isEditing = false;
+      });
     }
   }
 
@@ -348,7 +381,7 @@ class _PinHudPanelState extends State<PinHudPanel> {
   /// showing what kind of note this is, with the delete action
   /// aligned on the same row — not floating separately above the
   /// content the way it did before.
-  Widget _buildHeader() {
+    Widget _buildHeader() {
     return Row(
       mainAxisAlignment: MainAxisAlignment.spaceBetween,
       children: [
@@ -360,17 +393,90 @@ class _PinHudPanelState extends State<PinHudPanel> {
                 style: const TextStyle(color: Colors.cyanAccent, fontSize: 13, fontWeight: FontWeight.w600)),
           ],
         ),
-        IconButton(
-          icon: const Icon(Icons.delete_outline, color: Colors.redAccent),
-          tooltip: 'Delete this pin',
-          onPressed: _confirmDeletePin,
-          visualDensity: VisualDensity.compact,
+        Row(
+          mainAxisSize: MainAxisSize.min,
+          children: [
+            if (_note!.type != NoteType.audio)
+              IconButton(
+                icon: const Icon(Icons.edit_outlined, color: Colors.white70),
+                tooltip: 'Edit',
+                onPressed: _startEditing,
+                visualDensity: VisualDensity.compact,
+              ),
+            IconButton(
+              icon: const Icon(Icons.delete_outline, color: Colors.redAccent),
+              tooltip: 'Delete this pin',
+              onPressed: _confirmDeletePin,
+              visualDensity: VisualDensity.compact,
+            ),
+          ],
         ),
       ],
     );
   }
 
-  Widget _buildNoteContent(ScrollController scrollController) {
+    Widget _buildNoteContent(ScrollController scrollController) {
+    if (_isEditing) {
+      return SingleChildScrollView(
+        controller: scrollController,
+        child: Column(
+          crossAxisAlignment: CrossAxisAlignment.start,
+          children: [
+            _buildHeader(),
+            const SizedBox(height: 16),
+            if (_note!.type == NoteType.text)
+              TextField(
+                controller: _editBodyController,
+                maxLines: 4,
+                style: const TextStyle(color: Colors.white),
+                decoration: const InputDecoration(
+                  enabledBorder: OutlineInputBorder(borderSide: BorderSide(color: Colors.white24)),
+                  focusedBorder: OutlineInputBorder(borderSide: BorderSide(color: Colors.cyanAccent)),
+                ),
+              )
+            else ...[
+              TextField(
+                controller: _editQuestionController,
+                style: const TextStyle(color: Colors.white),
+                decoration: const InputDecoration(
+                  hintText: 'Question',
+                  hintStyle: TextStyle(color: Colors.white38),
+                  enabledBorder: OutlineInputBorder(borderSide: BorderSide(color: Colors.white24)),
+                  focusedBorder: OutlineInputBorder(borderSide: BorderSide(color: Colors.cyanAccent)),
+                ),
+              ),
+              const SizedBox(height: 12),
+              TextField(
+                controller: _editAnswerController,
+                style: const TextStyle(color: Colors.white),
+                decoration: const InputDecoration(
+                  hintText: 'Answer',
+                  hintStyle: TextStyle(color: Colors.white38),
+                  enabledBorder: OutlineInputBorder(borderSide: BorderSide(color: Colors.white24)),
+                  focusedBorder: OutlineInputBorder(borderSide: BorderSide(color: Colors.cyanAccent)),
+                ),
+              ),
+            ],
+            const SizedBox(height: 16),
+            Row(
+              children: [
+                TextButton(
+                  onPressed: () => setState(() => _isEditing = false),
+                  child: const Text('Cancel'),
+                ),
+                const SizedBox(width: 8),
+                ElevatedButton(
+                  onPressed: _saveEdit,
+                  style: ElevatedButton.styleFrom(backgroundColor: Colors.cyanAccent.shade700),
+                  child: const Text('Save'),
+                ),
+              ],
+            ),
+          ],
+        ),
+      );
+    }
+
     if (_note!.type == NoteType.text) {
       return SingleChildScrollView(
         controller: scrollController,
@@ -451,6 +557,8 @@ class _PinHudPanelState extends State<PinHudPanel> {
       ),
     );
   }
+
+
 
   Widget _difficultyButton(int rating) {
     return GestureDetector(

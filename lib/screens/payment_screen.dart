@@ -185,7 +185,7 @@ class _PaymentScreenState extends State<PaymentScreen> {
                 keyboardType: TextInputType.phone,
                 decoration: const InputDecoration(
                   labelText: 'M-Pesa phone number',
-                  hintText: 'e.g. 0700144600',
+                  hintText: 'e.g. 0701234500',
                   border: OutlineInputBorder(),
                 ),
               ),
