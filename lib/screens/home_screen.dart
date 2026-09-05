@@ -3,12 +3,12 @@ import 'package:supabase_flutter/supabase_flutter.dart';
 import 'create_walkthrough_screen.dart';
 import 'capture_screen.dart';
 import 'walkthrough_screen.dart';
-import 'join_class_screen.dart';
 import 'my_classes_screen.dart';
 import 'payment_screen.dart';
 import 'review_queue_screen.dart';
 import 'change_password_screen.dart';
 import '../services/supabase_service.dart';
+import 'my_joined_classes_screen.dart';
 
 class HomeScreen extends StatefulWidget {
   const HomeScreen({super.key});
@@ -130,13 +130,16 @@ class _HomeScreenState extends State<HomeScreen> {
               MaterialPageRoute(builder: (_) => const PaymentScreen()),
             ),
           ),
+
           IconButton(
             icon: const Icon(Icons.group_add),
-            tooltip: 'Join a class',
+            tooltip: 'My classes',
             onPressed: () => Navigator.of(context).push(
-              MaterialPageRoute(builder: (_) => const JoinClassScreen()),
+              MaterialPageRoute(builder: (_) => const MyJoinedClassesScreen()),
             ),
           ),
+
+
           PopupMenuButton<String>(
             onSelected: (value) {
               if (value == 'change_password') {

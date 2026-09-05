@@ -283,44 +283,73 @@ class _PinHudPanelState extends State<PinHudPanel> {
     );
   }
 
-  Widget _buildNoteContent(ScrollController scrollController) {
+
+
+    Widget _buildNoteContent(ScrollController scrollController) {
+    final deleteButton = Align(
+      alignment: Alignment.topRight,
+      child: IconButton(
+        icon: const Icon(Icons.delete_outline, color: Colors.redAccent),
+        tooltip: 'Delete this pin',
+        onPressed: _confirmDeletePin,
+      ),
+    );
+
     if (_note!.type == NoteType.text) {
       return SingleChildScrollView(
         controller: scrollController,
-        child: Text(
-          _note!.content['body'] ?? '',
-          style: const TextStyle(color: Colors.white, fontSize: 16),
+        child: Column(
+          crossAxisAlignment: CrossAxisAlignment.end,
+          children: [
+            deleteButton,
+            Align(
+              alignment: Alignment.centerLeft,
+              child: Text(
+                _note!.content['body'] ?? '',
+                style: const TextStyle(color: Colors.white, fontSize: 16),
+              ),
+            ),
+          ],
         ),
       );
     }
 
     if (_note!.type == NoteType.audio) {
-      return Center(
-        child: GestureDetector(
-          onTap: _togglePlayback,
-          child: Container(
-            width: 72,
-            height: 72,
-            decoration: BoxDecoration(
-              shape: BoxShape.circle,
-              color: Colors.cyanAccent.withOpacity(0.15),
-              border: Border.all(color: Colors.cyanAccent),
-            ),
-            child: Icon(
-              _isPlaying ? Icons.pause : Icons.play_arrow,
-              color: Colors.cyanAccent,
-              size: 36,
+      return Column(
+        children: [
+          deleteButton,
+          Expanded(
+            child: Center(
+              child: GestureDetector(
+                onTap: _togglePlayback,
+                child: Container(
+                  width: 72,
+                  height: 72,
+                  decoration: BoxDecoration(
+                    shape: BoxShape.circle,
+                    color: Colors.cyanAccent.withOpacity(0.15),
+                    border: Border.all(color: Colors.cyanAccent),
+                  ),
+                  child: Icon(
+                    _isPlaying ? Icons.pause : Icons.play_arrow,
+                    color: Colors.cyanAccent,
+                    size: 36,
+                  ),
+                ),
+              ),
             ),
           ),
-        ),
+        ],
       );
     }
 
+    // Flashcard
     return SingleChildScrollView(
       controller: scrollController,
       child: Column(
         crossAxisAlignment: CrossAxisAlignment.start,
         children: [
+          deleteButton,
           Text(
             _note!.content['question'] ?? '',
             style: const TextStyle(color: Colors.white, fontSize: 18, fontWeight: FontWeight.w600),
@@ -349,6 +378,32 @@ class _PinHudPanelState extends State<PinHudPanel> {
     );
   }
 
+  Future<void> _confirmDeletePin() async {
+    final confirmed = await showDialog<bool>(
+      context: context,
+      builder: (context) => AlertDialog(
+        title: const Text('Delete this pin?'),
+        content: const Text('This removes the pin and its note permanently.'),
+        actions: [
+          TextButton(
+            onPressed: () => Navigator.of(context).pop(false),
+            child: const Text('Cancel'),
+          ),
+          ElevatedButton(
+            onPressed: () => Navigator.of(context).pop(true),
+            style: ElevatedButton.styleFrom(backgroundColor: Colors.redAccent),
+            child: const Text('Delete'),
+          ),
+        ],
+      ),
+    );
+
+    if (confirmed == true) {
+      await _supabase.deletePin(widget.pin.id, noteId: widget.pin.noteId);
+      if (mounted) Navigator.of(context).pop();
+    }
+  }
+  
   Widget _difficultyButton(int rating) {
     return GestureDetector(
       onTap: () => _rateDifficulty(rating),

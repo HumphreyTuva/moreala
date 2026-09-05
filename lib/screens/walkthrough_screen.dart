@@ -147,13 +147,17 @@ class _WalkthroughScreenState extends State<WalkthroughScreen>
     _playTransitionThen(() => _direction = LookDirection.right);
   }
 
-  void _onPinTapped(SpatialPin pin) {
+    void _onPinTapped(SpatialPin pin) {
     showModalBottomSheet(
       context: context,
       isScrollControlled: true,
       backgroundColor: Colors.transparent,
       builder: (_) => PinHudPanel(pin: pin),
-    );
+    ).then((_) {
+      // Refresh regardless of why the panel closed — covers both a
+      // pin being deleted and a new note just being created.
+      _loadPinsForCurrent();
+    });
   }
 
   Future<void> _onPhotoLongPress(Offset localPosition, Size photoSize) async {

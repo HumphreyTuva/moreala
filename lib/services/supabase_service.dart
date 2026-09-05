@@ -265,6 +265,18 @@ class SupabaseService {
     await _client.from('models').delete().eq('id', modelId);
   }
 
+
+  Future<void> deletePin(String pinId, {String? noteId}) async {
+    // Delete the note first (if one exists) — deleting the pin alone
+    // would leave an orphaned note row nothing points to. RLS's
+    // notes_delete_own / pins_delete_own policies already restrict
+    // each to their respective owner.
+    if (noteId != null) {
+      await _client.from('notes').delete().eq('id', noteId);
+    }
+    await _client.from('pins').delete().eq('id', pinId);
+  }
+
   /// Triggers server-side keyframe extraction for a just-uploaded raw
   /// video. Returns immediately once the worker has ACCEPTED the job
   /// (202) — actual processing happens in the background. Poll
@@ -338,6 +350,16 @@ class SupabaseService {
         .select('joined_at, users(name, email)')
         .eq('class_id', classId)
         .order('joined_at');
+  }
+
+
+    Future<List<Map<String, dynamic>>> getJoinedClasses() async {
+    final userId = await _internalUserId();
+    return await _client
+        .from('class_members')
+        .select('joined_at, classes(id, class_code, is_active, model_id, models(title))')
+        .eq('user_id', userId)
+        .order('joined_at', ascending: false);
   }
 
   // ---------------- CLASSES ----------------
