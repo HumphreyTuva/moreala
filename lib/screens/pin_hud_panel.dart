@@ -10,9 +10,9 @@ import '../services/sm2_service.dart';
 
 /// Frosted glass modal for a tapped pin. States:
 ///   1. No note yet -> form to create one (text / flashcard / audio).
-///   2. Text note -> just displayed.
-///   3. Flashcard -> question -> Show Answer -> rate 1-5 -> SM-2.
-///   4. Audio note -> play button, streams from Supabase Storage.
+///   2. Text note -> displayed, with delete.
+///   3. Flashcard -> question -> Show Answer -> rate 1-5 -> SM-2, with delete.
+///   4. Audio note -> play button, with delete.
 /// Stays open until the student dismisses it (no auto-close timer).
 class PinHudPanel extends StatefulWidget {
   final SpatialPin pin;
@@ -156,33 +156,91 @@ class _PinHudPanelState extends State<PinHudPanel> {
     await _player.play(UrlSource(signedUrl));
   }
 
-  @override
-  Widget build(BuildContext context) {
-    return DraggableScrollableSheet(
-      initialChildSize: 0.5,
-      minChildSize: 0.3,
-      maxChildSize: 0.9,
-      builder: (context, scrollController) {
-        return ClipRRect(
-          borderRadius: const BorderRadius.vertical(top: Radius.circular(24)),
-          child: BackdropFilter(
-            filter: ImageFilter.blur(sigmaX: 16, sigmaY: 16),
-            child: Container(
-              decoration: BoxDecoration(
-                color: Colors.black.withOpacity(0.55),
-                border: Border.all(color: Colors.cyanAccent.withOpacity(0.4), width: 1),
-                borderRadius: const BorderRadius.vertical(top: Radius.circular(24)),
-              ),
-              padding: const EdgeInsets.all(24),
-              child: _loading
-                  ? const Center(child: CircularProgressIndicator(color: Colors.cyanAccent))
-                  : _note == null
-                      ? _buildCreateForm(scrollController)
-                      : _buildNoteContent(scrollController),
-            ),
+  Future<void> _confirmDeletePin() async {
+    final confirmed = await showDialog<bool>(
+      context: context,
+      builder: (context) => AlertDialog(
+        title: const Text('Delete this pin?'),
+        content: const Text('This removes the pin and its note permanently.'),
+        actions: [
+          TextButton(
+            onPressed: () => Navigator.of(context).pop(false),
+            child: const Text('Cancel'),
           ),
-        );
-      },
+          ElevatedButton(
+            onPressed: () => Navigator.of(context).pop(true),
+            style: ElevatedButton.styleFrom(backgroundColor: Colors.redAccent),
+            child: const Text('Delete'),
+          ),
+        ],
+      ),
+    );
+
+    if (confirmed == true) {
+      await _supabase.deletePin(widget.pin.id, noteId: widget.pin.noteId);
+      if (mounted) Navigator.of(context).pop();
+    }
+  }
+
+  IconData get _typeIcon {
+    switch (_note?.type) {
+      case NoteType.flashcard:
+        return Icons.style;
+      case NoteType.audio:
+        return Icons.mic;
+      default:
+        return Icons.sticky_note_2;
+    }
+  }
+
+  String get _typeLabel {
+    switch (_note?.type) {
+      case NoteType.flashcard:
+        return 'Flashcard';
+      case NoteType.audio:
+        return 'Voice note';
+      default:
+        return 'Note';
+    }
+  }
+
+    @override
+  Widget build(BuildContext context) {
+    // Shrinks the space available to the sheet by the keyboard's
+    // height BEFORE DraggableScrollableSheet computes its fractional
+    // sizes — that's what actually makes the sheet move up and fit
+    // above the keyboard, rather than just padding content inside a
+    // box that stayed the same size (which is what happened before:
+    // the sheet's height never changed, so the keyboard just covered
+    // most of it regardless).
+    return Padding(
+      padding: EdgeInsets.only(bottom: MediaQuery.of(context).viewInsets.bottom),
+      child: DraggableScrollableSheet(
+        initialChildSize: 0.5,
+        minChildSize: 0.3,
+        maxChildSize: 0.9,
+        builder: (context, scrollController) {
+          return ClipRRect(
+            borderRadius: const BorderRadius.vertical(top: Radius.circular(24)),
+            child: BackdropFilter(
+              filter: ImageFilter.blur(sigmaX: 16, sigmaY: 16),
+              child: Container(
+                decoration: BoxDecoration(
+                  color: Colors.black.withOpacity(0.55),
+                  border: Border.all(color: Colors.cyanAccent.withOpacity(0.4), width: 1),
+                  borderRadius: const BorderRadius.vertical(top: Radius.circular(24)),
+                ),
+                padding: const EdgeInsets.all(24),
+                child: _loading
+                    ? const Center(child: CircularProgressIndicator(color: Colors.cyanAccent))
+                    : _note == null
+                        ? _buildCreateForm(scrollController)
+                        : _buildNoteContent(scrollController),
+              ),
+            ),
+          );
+        },
+      ),
     );
   }
 
@@ -214,6 +272,7 @@ class _PinHudPanelState extends State<PinHudPanel> {
                 hintText: 'What do you want to remember here?',
                 hintStyle: TextStyle(color: Colors.white38),
                 enabledBorder: OutlineInputBorder(borderSide: BorderSide(color: Colors.white24)),
+                focusedBorder: OutlineInputBorder(borderSide: BorderSide(color: Colors.cyanAccent)),
               ),
             )
           else if (_newNoteType == NoteType.flashcard) ...[
@@ -224,6 +283,7 @@ class _PinHudPanelState extends State<PinHudPanel> {
                 hintText: 'Question',
                 hintStyle: TextStyle(color: Colors.white38),
                 enabledBorder: OutlineInputBorder(borderSide: BorderSide(color: Colors.white24)),
+                focusedBorder: OutlineInputBorder(borderSide: BorderSide(color: Colors.cyanAccent)),
               ),
             ),
             const SizedBox(height: 12),
@@ -234,6 +294,7 @@ class _PinHudPanelState extends State<PinHudPanel> {
                 hintText: 'Answer',
                 hintStyle: TextStyle(color: Colors.white38),
                 enabledBorder: OutlineInputBorder(borderSide: BorderSide(color: Colors.white24)),
+                focusedBorder: OutlineInputBorder(borderSide: BorderSide(color: Colors.cyanAccent)),
               ),
             ),
           ] else
@@ -283,31 +344,44 @@ class _PinHudPanelState extends State<PinHudPanel> {
     );
   }
 
-
-
-    Widget _buildNoteContent(ScrollController scrollController) {
-    final deleteButton = Align(
-      alignment: Alignment.topRight,
-      child: IconButton(
-        icon: const Icon(Icons.delete_outline, color: Colors.redAccent),
-        tooltip: 'Delete this pin',
-        onPressed: _confirmDeletePin,
-      ),
+  /// Shared header for every existing-note view: an icon + label
+  /// showing what kind of note this is, with the delete action
+  /// aligned on the same row — not floating separately above the
+  /// content the way it did before.
+  Widget _buildHeader() {
+    return Row(
+      mainAxisAlignment: MainAxisAlignment.spaceBetween,
+      children: [
+        Row(
+          children: [
+            Icon(_typeIcon, color: Colors.cyanAccent, size: 20),
+            const SizedBox(width: 8),
+            Text(_typeLabel,
+                style: const TextStyle(color: Colors.cyanAccent, fontSize: 13, fontWeight: FontWeight.w600)),
+          ],
+        ),
+        IconButton(
+          icon: const Icon(Icons.delete_outline, color: Colors.redAccent),
+          tooltip: 'Delete this pin',
+          onPressed: _confirmDeletePin,
+          visualDensity: VisualDensity.compact,
+        ),
+      ],
     );
+  }
 
+  Widget _buildNoteContent(ScrollController scrollController) {
     if (_note!.type == NoteType.text) {
       return SingleChildScrollView(
         controller: scrollController,
         child: Column(
-          crossAxisAlignment: CrossAxisAlignment.end,
+          crossAxisAlignment: CrossAxisAlignment.start,
           children: [
-            deleteButton,
-            Align(
-              alignment: Alignment.centerLeft,
-              child: Text(
-                _note!.content['body'] ?? '',
-                style: const TextStyle(color: Colors.white, fontSize: 16),
-              ),
+            _buildHeader(),
+            const SizedBox(height: 16),
+            Text(
+              _note!.content['body'] ?? '',
+              style: const TextStyle(color: Colors.white, fontSize: 16),
             ),
           ],
         ),
@@ -317,24 +391,23 @@ class _PinHudPanelState extends State<PinHudPanel> {
     if (_note!.type == NoteType.audio) {
       return Column(
         children: [
-          deleteButton,
-          Expanded(
-            child: Center(
-              child: GestureDetector(
-                onTap: _togglePlayback,
-                child: Container(
-                  width: 72,
-                  height: 72,
-                  decoration: BoxDecoration(
-                    shape: BoxShape.circle,
-                    color: Colors.cyanAccent.withOpacity(0.15),
-                    border: Border.all(color: Colors.cyanAccent),
-                  ),
-                  child: Icon(
-                    _isPlaying ? Icons.pause : Icons.play_arrow,
-                    color: Colors.cyanAccent,
-                    size: 36,
-                  ),
+          _buildHeader(),
+          const SizedBox(height: 24),
+          Center(
+            child: GestureDetector(
+              onTap: _togglePlayback,
+              child: Container(
+                width: 72,
+                height: 72,
+                decoration: BoxDecoration(
+                  shape: BoxShape.circle,
+                  color: Colors.cyanAccent.withOpacity(0.15),
+                  border: Border.all(color: Colors.cyanAccent),
+                ),
+                child: Icon(
+                  _isPlaying ? Icons.pause : Icons.play_arrow,
+                  color: Colors.cyanAccent,
+                  size: 36,
                 ),
               ),
             ),
@@ -349,7 +422,8 @@ class _PinHudPanelState extends State<PinHudPanel> {
       child: Column(
         crossAxisAlignment: CrossAxisAlignment.start,
         children: [
-          deleteButton,
+          _buildHeader(),
+          const SizedBox(height: 16),
           Text(
             _note!.content['question'] ?? '',
             style: const TextStyle(color: Colors.white, fontSize: 18, fontWeight: FontWeight.w600),
@@ -378,32 +452,6 @@ class _PinHudPanelState extends State<PinHudPanel> {
     );
   }
 
-  Future<void> _confirmDeletePin() async {
-    final confirmed = await showDialog<bool>(
-      context: context,
-      builder: (context) => AlertDialog(
-        title: const Text('Delete this pin?'),
-        content: const Text('This removes the pin and its note permanently.'),
-        actions: [
-          TextButton(
-            onPressed: () => Navigator.of(context).pop(false),
-            child: const Text('Cancel'),
-          ),
-          ElevatedButton(
-            onPressed: () => Navigator.of(context).pop(true),
-            style: ElevatedButton.styleFrom(backgroundColor: Colors.redAccent),
-            child: const Text('Delete'),
-          ),
-        ],
-      ),
-    );
-
-    if (confirmed == true) {
-      await _supabase.deletePin(widget.pin.id, noteId: widget.pin.noteId);
-      if (mounted) Navigator.of(context).pop();
-    }
-  }
-  
   Widget _difficultyButton(int rating) {
     return GestureDetector(
       onTap: () => _rateDifficulty(rating),
