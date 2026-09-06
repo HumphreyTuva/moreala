@@ -1,18 +1,9 @@
 import 'package:flutter/material.dart';
 import 'package:supabase_flutter/supabase_flutter.dart';
+import '../utils/error_utils.dart';
 
 /// Email/password auth. On successful signup, also creates the
-/// matching row in the public `users` table (auth.users is separate
-/// from our own `users` table, which is what `current_user_id()` in
-/// the RLS policies joins against via `auth_id`).
-///
-/// No manual navigation happens here on success — main.dart listens
-/// to Supabase's auth state stream and swaps to HomeScreen on its own
-/// once the session actually changes. That fixes a real bug the old
-/// version had: navigating manually here meant sign-OUT (triggered
-/// from HomeScreen, far away from this widget) had no matching code
-/// to send the user back to AuthScreen, so logout silently did nothing
-/// visible even though the session was actually cleared.
+/// matching row in the public `users` table.
 class AuthScreen extends StatefulWidget {
   const AuthScreen({super.key});
 
@@ -65,9 +56,20 @@ class _AuthScreenState extends State<AuthScreen> {
       }
       // No navigation here — main.dart's auth-state listener handles it.
     } on AuthException catch (e) {
-      setState(() => _error = e.message);
+      // Network failures during auth (e.g. no internet) actually
+      // throw a subtype of AuthException, not a plain generic
+      // exception — so they land here first, with the raw technical
+      // text sitting in e.message. Only genuine auth errors (wrong
+      // password, user not found, etc.) should show e.message as-is.
+      if (e.message.contains('SocketException') ||
+          e.message.contains('ClientException') ||
+          e.message.contains('Failed host lookup')) {
+        setState(() => _error = friendlyErrorMessage(e));
+      } else {
+        setState(() => _error = e.message);
+      }
     } catch (e) {
-      setState(() => _error = 'Something went wrong: $e');
+      setState(() => _error = friendlyErrorMessage(e));
     } finally {
       if (mounted) setState(() => _loading = false);
     }
@@ -113,7 +115,7 @@ class _AuthScreenState extends State<AuthScreen> {
                   : () async {
                       setDialogState(() => sending = true);
                       try {
-                         await Supabase.instance.client.auth.resetPasswordForEmail(
+                        await Supabase.instance.client.auth.resetPasswordForEmail(
                           controller.text.trim(),
                           redirectTo: 'moreala://reset-callback',
                         );
@@ -127,7 +129,7 @@ class _AuthScreenState extends State<AuthScreen> {
                         }
                       } catch (e) {
                         setDialogState(() {
-                          dialogError = 'Could not send reset email: $e';
+                          dialogError = friendlyErrorMessage(e);
                           sending = false;
                         });
                       }

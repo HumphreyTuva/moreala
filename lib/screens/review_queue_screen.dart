@@ -1,8 +1,9 @@
 import 'package:flutter/material.dart';
 import '../services/supabase_service.dart';
 import '../services/sm2_service.dart';
+import '../utils/error_utils.dart';
 
-/// "What's due today" — pulls every flashcard across all the
+/// Failed to load"What's due today" — pulls every flashcard across all the
 /// student's walkthroughs whose next_review_date has arrived, and
 /// lets them work through the pile right here, without needing to
 /// hunt down each pin individually inside its walkthrough.
@@ -43,14 +44,16 @@ class _ReviewQueueScreenState extends State<ReviewQueueScreen> {
           _loading = false;
         });
       }
+
     } catch (e) {
       if (mounted) {
         setState(() {
           _loading = false;
-          _error = 'Failed to load: $e';
+          _error = friendlyErrorMessage(e);
         });
       }
     }
+
   }
 
   Map<String, dynamic>? get _current => _index < _queue.length ? _queue[_index] : null;

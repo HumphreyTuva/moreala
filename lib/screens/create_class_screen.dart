@@ -1,8 +1,9 @@
 import 'package:flutter/material.dart';
 import '../services/supabase_service.dart';
 import 'class_roster_screen.dart';
+import '../utils/error_utils.dart';
 
-/// Lets the current user create a class join code (e.g. "EPS210-FINALS")
+/// Could not create class Lets the current user create a class join code (e.g. "EPS210-FINALS")
 /// pointing at one of their own finished ("ready") walkthroughs, so
 /// students can join and study the shared space together.
 class CreateClassScreen extends StatefulWidget {
@@ -62,12 +63,19 @@ class _CreateClassScreenState extends State<CreateClassScreen> {
           ),
         ),
       );
+
     } catch (e) {
-      // Most likely failure: the unique(class_code) constraint —
-      // someone (possibly the lecturer themselves, retrying) already
-      // used this exact code.
-      setState(() => _error = 'Could not create class — is that code already taken? ($e)');
+      final message = e.toString();
+      if (message.contains('SocketException') || message.contains('Failed host lookup')) {
+        setState(() => _error = friendlyErrorMessage(e));
+      } else {
+        // Most likely failure otherwise: the unique(class_code)
+        // constraint — someone (possibly the lecturer themselves,
+        // retrying) already used this exact code.
+        setState(() => _error = 'Could not create class — that code may already be taken. Try a different one.');
+      }
     } finally {
+
       if (mounted) setState(() => _creating = false);
     }
   }

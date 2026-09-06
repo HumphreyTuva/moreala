@@ -39,6 +39,19 @@ class _PaymentScreenState extends State<PaymentScreen> {
     super.dispose();
   }
 
+    /// Translates common technical failures — especially "no internet"
+  /// — into plain language instead of showing a raw SocketException
+  /// or similar, which reads as a crash to someone who's just offline.
+  String _friendlyPaymentError(Object e) {
+    final message = e.toString();
+    if (message.contains('SocketException') ||
+        message.contains('Failed host lookup') ||
+        message.contains('Network is unreachable')) {
+      return 'You appear to be offline. Check your internet connection and try again.';
+    }
+    return 'Could not start payment. Please try again in a moment.';
+  }
+
   Future<void> _pay() async {
     final phone = _normalizePhoneNumber(_phoneController.text);
     if (phone == null) {
@@ -57,7 +70,7 @@ class _PaymentScreenState extends State<PaymentScreen> {
     } catch (e) {
       setState(() {
         _state = _PaymentState.form;
-        _error = 'Could not start payment: $e';
+        _error = _friendlyPaymentError(e);
       });
     }
   }

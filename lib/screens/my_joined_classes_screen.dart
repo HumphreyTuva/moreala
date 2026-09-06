@@ -2,8 +2,9 @@ import 'package:flutter/material.dart';
 import '../services/supabase_service.dart';
 import 'walkthrough_screen.dart';
 import 'join_class_screen.dart';
+import '../utils/error_utils.dart';
 
-/// The student-side equivalent of MyClassesScreen — every class the
+/// Failed to loadThe student-side equivalent of MyClassesScreen — every class the
 /// current user has joined, so they can get back into a shared
 /// walkthrough without needing to remember and retype the join code
 /// each time.
@@ -50,9 +51,9 @@ class _MyJoinedClassesScreenState extends State<MyJoinedClassesScreen> {
             if (snapshot.connectionState != ConnectionState.done) {
               return const Center(child: CircularProgressIndicator());
             }
-            if (snapshot.hasError) {
-              return Center(child: Text('Failed to load: ${snapshot.error}'));
-            }
+                  if (snapshot.hasError) {
+                    return Center(child: Text(friendlyErrorMessage(snapshot.error!)));
+                  }
             final joined = snapshot.data ?? [];
             if (joined.isEmpty) {
               return ListView(

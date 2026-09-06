@@ -9,6 +9,9 @@ import 'review_queue_screen.dart';
 import 'change_password_screen.dart';
 import '../services/supabase_service.dart';
 import 'my_joined_classes_screen.dart';
+import '../utils/error_utils.dart';
+
+//Failed to load
 
 class HomeScreen extends StatefulWidget {
   const HomeScreen({super.key});
@@ -241,7 +244,7 @@ class _HomeScreenState extends State<HomeScreen> {
               return const Center(child: CircularProgressIndicator());
             }
             if (snapshot.hasError) {
-              return Center(child: Text('Failed to load: ${snapshot.error}'));
+              return Center(child: Text(friendlyErrorMessage(snapshot.error!)));
             }
             final models = snapshot.data?.models ?? [];
             if (models.isEmpty) {

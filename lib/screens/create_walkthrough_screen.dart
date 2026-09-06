@@ -4,10 +4,11 @@ import 'capture_screen.dart';
 import 'video_capture_screen.dart';
 import 'payment_screen.dart';
 import '../services/supabase_service.dart';
+import '../utils/error_utils.dart';
 
 enum _CaptureMode { photos, video }
 
-/// Lets a student/lecturer create a new walkthrough space (a `models`
+/// Could not create walkthrough Lets a student/lecturer create a new walkthrough space (a `models`
 /// row) and choose how to capture it:
 ///   - Photos (stop-and-shoot): reliable, tested, works with no extra
 ///     setup. Recommended default.
@@ -83,9 +84,11 @@ class _CreateWalkthroughScreenState extends State<CreateWalkthroughScreen> {
               : VideoCaptureScreen(modelId: modelRow['id']),
         ),
       );
+
     } catch (e) {
-      setState(() => _error = 'Could not create walkthrough: $e');
+      setState(() => _error = friendlyErrorMessage(e));
     } finally {
+
       if (mounted) setState(() => _creating = false);
     }
   }
