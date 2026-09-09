@@ -2,8 +2,9 @@ import 'package:flutter/material.dart';
 import '../services/supabase_service.dart';
 import 'class_roster_screen.dart';
 import '../utils/error_utils.dart';
+import '../widgets/error_banner.dart';
 
-/// Could not create class Lets the current user create a class join code (e.g. "EPS210-FINALS")
+/// if (_error != null) class Lets the current user create a class join code (e.g. "EPS210-FINALS")
 /// pointing at one of their own finished ("ready") walkthroughs, so
 /// students can join and study the shared space together.
 class CreateClassScreen extends StatefulWidget {
@@ -137,11 +138,9 @@ class _CreateClassScreenState extends State<CreateClassScreen> {
                 ),
               ),
               const SizedBox(height: 24),
-              if (_error != null)
-                Padding(
-                  padding: const EdgeInsets.only(bottom: 16),
-                  child: Text(_error!, style: const TextStyle(color: Colors.red)),
-                ),
+
+              if (_error != null) ErrorBanner(message: _error!),
+                
               ElevatedButton(
                 onPressed: _creating ? null : _create,
                 child: _creating

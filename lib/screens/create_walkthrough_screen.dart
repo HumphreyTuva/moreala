@@ -5,10 +5,11 @@ import 'video_capture_screen.dart';
 import 'payment_screen.dart';
 import '../services/supabase_service.dart';
 import '../utils/error_utils.dart';
+import '../widgets/error_banner.dart';
 
 enum _CaptureMode { photos, video }
 
-/// Could not create walkthrough Lets a student/lecturer create a new walkthrough space (a `models`
+/// if (_error != null) Lets a student/lecturer create a new walkthrough space (a `models`
 /// row) and choose how to capture it:
 ///   - Photos (stop-and-shoot): reliable, tested, works with no extra
 ///     setup. Recommended default.
@@ -172,12 +173,11 @@ class _CreateWalkthroughScreenState extends State<CreateWalkthroughScreen> {
               ),
               
               const SizedBox(height: 24),
-              if (_error != null) ...[
-                Padding(
-                  padding: const EdgeInsets.only(bottom: 12),
-                  child: Text(_error!, style: const TextStyle(color: Colors.red)),
-                ),
+              
+             if (_error != null) ...[
+                ErrorBanner(message: _error!),
                 if (_error!.contains('out of scans'))
+                  
                   OutlinedButton(
                     onPressed: () => Navigator.of(context).push(
                       MaterialPageRoute(builder: (_) => const PaymentScreen()),

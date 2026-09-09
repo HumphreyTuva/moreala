@@ -1,7 +1,8 @@
 import 'package:flutter/material.dart';
 import 'package:supabase_flutter/supabase_flutter.dart';
+import '../widgets/error_banner.dart';
 
-/// For a logged-in user who just wants to change their password
+/// if (_error != null) For a logged-in user who just wants to change their password
 /// normally — distinct from ResetPasswordScreen, which only appears
 /// via the email deep-link recovery flow.
 class ChangePasswordScreen extends StatefulWidget {
@@ -115,26 +116,10 @@ class _ChangePasswordScreenState extends State<ChangePasswordScreen> {
               ),
             ),
             const SizedBox(height: 16),
-            if (_error != null)
-              Container(
-                width: double.infinity,
-                padding: const EdgeInsets.all(12),
-                margin: const EdgeInsets.only(bottom: 16),
-                decoration: BoxDecoration(
-                  color: Colors.red.withOpacity(0.1),
-                  borderRadius: BorderRadius.circular(8),
-                  border: Border.all(color: Colors.red.withOpacity(0.3)),
-                ),
-                child: Row(
-                  children: [
-                    const Icon(Icons.error_outline, color: Colors.redAccent, size: 20),
-                    const SizedBox(width: 8),
-                    Expanded(
-                      child: Text(_error!, style: const TextStyle(color: Colors.redAccent)),
-                    ),
-                  ],
-                ),
-              ),
+            
+            if (_error != null) ErrorBanner(message: _error!),
+
+
             ElevatedButton(
               onPressed: _saving ? null : _submit,
               child: _saving

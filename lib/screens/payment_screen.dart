@@ -1,8 +1,9 @@
 import 'dart:async';
 import 'package:flutter/material.dart';
 import '../services/supabase_service.dart';
+import '../widgets/error_banner.dart';
 
-/// Lets the current user buy a private scan or upgrade to Lecturer Pro
+/// if (_error != null) Lets the current user buy a private scan or upgrade to Lecturer Pro
 /// via M-Pesa STK push. Triggers the push, then polls the `payments`
 /// row every couple seconds until mpesa-webhook has updated its status
 /// (this is a plain repeated read, not a live subscription — matching
@@ -203,11 +204,9 @@ class _PaymentScreenState extends State<PaymentScreen> {
                 ),
               ),
               const SizedBox(height: 16),
-              if (_error != null)
-                Padding(
-                  padding: const EdgeInsets.only(bottom: 16),
-                  child: Text(_error!, style: const TextStyle(color: Colors.red)),
-                ),
+
+              if (_error != null) ErrorBanner(message: _error!),
+              
               ElevatedButton(
                 onPressed: _pay,
                 child: const Text('Pay now'),

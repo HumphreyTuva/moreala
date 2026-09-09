@@ -1,8 +1,9 @@
 import 'package:flutter/material.dart';
 import 'package:supabase_flutter/supabase_flutter.dart';
 import 'home_screen.dart';
+import '../widgets/error_banner.dart';
 
-/// Shown when the app is opened via the password-reset deep link.
+///if (_error != null) Shown when the app is opened via the password-reset deep link.
 /// Supabase's SDK establishes a temporary "recovery" session for this
 /// moment automatically once the link is opened (that's what the
 /// AuthChangeEvent.passwordRecovery event in main.dart detects) — this
@@ -87,11 +88,9 @@ class _ResetPasswordScreenState extends State<ResetPasswordScreen> {
               decoration: const InputDecoration(labelText: 'Confirm new password'),
             ),
             const SizedBox(height: 16),
-            if (_error != null)
-              Padding(
-                padding: const EdgeInsets.only(bottom: 12),
-                child: Text(_error!, style: const TextStyle(color: Colors.red)),
-              ),
+            
+            if (_error != null) ErrorBanner(message: _error!),
+            
             ElevatedButton(
               onPressed: _saving ? null : _submit,
               child: _saving

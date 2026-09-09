@@ -1,7 +1,7 @@
 import 'package:flutter/material.dart';
 import 'package:supabase_flutter/supabase_flutter.dart';
 import '../utils/error_utils.dart';
-
+import '../widgets/error_banner.dart';
 /// Email/password auth. On successful signup, also creates the
 /// matching row in the public `users` table.
 class AuthScreen extends StatefulWidget {
@@ -187,12 +187,10 @@ class _AuthScreenState extends State<AuthScreen> {
                     child: const Text('Forgot password?'),
                   ),
                 ),
+
               const SizedBox(height: 8),
-              if (_error != null)
-                Padding(
-                  padding: const EdgeInsets.only(bottom: 12),
-                  child: Text(_error!, style: const TextStyle(color: Colors.red)),
-                ),
+              if (_error != null) ErrorBanner(message: _error!),
+              
               ElevatedButton(
                 onPressed: _loading ? null : _submit,
                 child: _loading

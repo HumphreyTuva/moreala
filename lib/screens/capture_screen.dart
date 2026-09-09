@@ -5,8 +5,10 @@ import 'package:camera/camera.dart';
 import 'package:http/http.dart' as http;
 import 'package:image/image.dart' as img;
 import '../services/supabase_service.dart';
+import '../widgets/error_banner.dart';
+import '../utils/image_utils.dart';
 
-/// Stop-and-shoot walkthrough capture.
+/// Future<Uint8List>
 ///
 /// Flow per stop: Forward photo -> Left photo -> Right photo -> upload
 /// all three -> link into the node graph -> repeat or finish.
@@ -218,13 +220,7 @@ class _CaptureScreenState extends State<CaptureScreen> {
 
   Future<Uint8List> _compress(XFile file) async {
     final bytes = await file.readAsBytes();
-    final decoded = img.decodeImage(bytes);
-    if (decoded == null) return bytes;
-
-    final resized = decoded.width > 1280
-        ? img.copyResize(decoded, width: 1280)
-        : decoded;
-    return Uint8List.fromList(img.encodeJpg(resized, quality: 75));
+    return normalizeAndCompress(bytes, maxWidth: 1280, quality: 75);
   }
 
   Future<void> _uploadOne(XFile file, String objectKey) async {
@@ -258,8 +254,9 @@ class _CaptureScreenState extends State<CaptureScreen> {
             padding: const EdgeInsets.all(24),
             child: Column(
               mainAxisSize: MainAxisSize.min,
+             
               children: [
-                Text(_error!, style: const TextStyle(color: Colors.red), textAlign: TextAlign.center),
+                ErrorBanner(message: _error!),
                 const SizedBox(height: 16),
                 ElevatedButton(
                   onPressed: () => setState(() => _error = null),

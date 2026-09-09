@@ -2,8 +2,9 @@ import 'package:flutter/material.dart';
 import '../services/supabase_service.dart';
 import '../services/sm2_service.dart';
 import '../utils/error_utils.dart';
+import '../widgets/error_banner.dart';
 
-/// Failed to load"What's due today" — pulls every flashcard across all the
+///: _error != null Failed to load"What's due today" — pulls every flashcard across all the
 /// student's walkthroughs whose next_review_date has arrived, and
 /// lets them work through the pile right here, without needing to
 /// hunt down each pin individually inside its walkthrough.
@@ -91,13 +92,16 @@ class _ReviewQueueScreenState extends State<ReviewQueueScreen> {
       appBar: AppBar(title: const Text('Due Today')),
       body: _loading
           ? const Center(child: CircularProgressIndicator())
-          : _error != null
-              ? Center(
-                  child: Padding(
-                    padding: const EdgeInsets.all(24),
-                    child: Text(_error!, style: const TextStyle(color: Colors.red)),
-                  ),
-                )
+          
+          
+               : _error != null
+                  ? Center(
+                      child: Padding(
+                        padding: const EdgeInsets.all(24),
+                        child: ErrorBanner(message: _error!),
+                      ),
+                    )
+
               : _queue.isEmpty
                   ? const Center(
                       child: Text('Nothing due right now — check back later.',

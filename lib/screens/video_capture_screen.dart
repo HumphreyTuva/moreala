@@ -7,8 +7,10 @@ import 'package:video_thumbnail/video_thumbnail.dart' as vt;
 import 'package:video_player/video_player.dart';
 import '../services/supabase_service.dart';
 import 'walkthrough_screen.dart';
+import '../widgets/error_banner.dart';
+import '../utils/image_utils.dart';
 
-/// Video-based capture, done ENTIRELY on-device — no server, no
+/// _extractAndUploadFrames Video-based capture, done ENTIRELY on-device — no server, no
 /// cloud worker, no hosting bill. Records one continuous walkthrough
 /// video, then extracts frames locally at fixed intervals using the
 /// phone's own hardware video decoder (via video_thumbnail), uploads
@@ -23,12 +25,14 @@ import 'walkthrough_screen.dart';
 /// without the side-look photos at each video-mode stop.
 ///
 /// HONEST NOTE ON SPEED: extraction happens on the student's own
-/// phone before upload even starts. On a low-end Android device, a
-/// longer video could take real time (well over a minute) and some
-/// battery to process. If this turns out too slow in practice, the
-/// fix is a paid cloud worker doing the same job server-side instead
-/// — that's a genuine tradeoff to make with real usage data, not
-/// something to guess at now.
+/// phone before upload even starts, and now samples 3 candidate
+/// frames per stop (to pick the sharpest, avoiding motion-blurred
+/// keyframes) instead of 1 — roughly 3x the processing time this
+/// added. On a low-end Android device, a longer video could take
+/// real time (multiple minutes) and meaningful battery. If this
+/// turns out too slow in practice, the fix is a paid cloud worker
+/// doing the same job server-side instead — that's a genuine
+/// tradeoff to make with real usage data, not something to guess at.
 class VideoCaptureScreen extends StatefulWidget {
   final String modelId;
   const VideoCaptureScreen({super.key, required this.modelId});
@@ -133,21 +137,40 @@ class _VideoCaptureScreenState extends State<VideoCaptureScreen> {
 
     String? lastPhotoPointId;
 
-    for (var i = 0; i < stopCount; i++) {
-      final timestampMs = (i * actualIntervalMs).round().clamp(0, durationMs - 1);
+        for (var i = 0; i < stopCount; i++) {
+      final baseTimestampMs = (i * actualIntervalMs).round().clamp(0, durationMs - 1);
 
-      final Uint8List? frameBytes = await vt.VideoThumbnail.thumbnailData(
-        video: videoPath,
-        imageFormat: vt.ImageFormat.JPEG,
-        timeMs: timestampMs,
-        quality: 70,
-        maxWidth: 1280,
-      );
+      // Sample a few frames near this stop's target moment and keep
+      // the sharpest — motion blur while walking is the main quality
+      // problem with continuous video capture. This roughly triples
+      // per-stop processing time (3 extractions instead of 1), a
+      // genuine speed/quality tradeoff worth knowing about.
+      Uint8List? bestRawFrame;
+      double bestScore = -1;
+      for (final offsetMs in [-150, 0, 150]) {
+        final candidateTimestamp = (baseTimestampMs + offsetMs).clamp(0, durationMs - 1);
+        final candidateBytes = await vt.VideoThumbnail.thumbnailData(
+          video: videoPath,
+          imageFormat: vt.ImageFormat.JPEG,
+          timeMs: candidateTimestamp,
+          quality: 70,
+          maxWidth: 1280,
+        );
+        if (candidateBytes == null) continue;
+        final score = sharpnessScore(candidateBytes);
+        if (score > bestScore) {
+          bestScore = score;
+          bestRawFrame = candidateBytes;
+        }
+      }
+
+      final Uint8List? frameBytes =
+          bestRawFrame != null ? normalizeAndCompress(bestRawFrame, quality: 80) : null;
 
       if (frameBytes == null) {
-        // Skip a frame the decoder couldn't produce (can happen right
-        // at the very start/end of a clip) rather than failing the
-        // whole walkthrough over one bad frame.
+        // None of the candidates could be produced (can happen right
+        // at the very start/end of a clip) — skip rather than fail
+        // the whole walkthrough over one bad frame.
         continue;
       }
 
@@ -246,7 +269,7 @@ class _VideoCaptureScreenState extends State<VideoCaptureScreen> {
                 children: [
                   const Icon(Icons.error_outline, color: Colors.redAccent, size: 64),
                   const SizedBox(height: 16),
-                  Text(_error ?? 'Something went wrong.', textAlign: TextAlign.center),
+                  ErrorBanner(message: _error ?? 'Something went wrong.'),
                   const SizedBox(height: 24),
                   ElevatedButton(
                     onPressed: () => Navigator.of(context).pop(),

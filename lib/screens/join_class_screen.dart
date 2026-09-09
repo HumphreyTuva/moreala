@@ -2,8 +2,9 @@ import 'package:flutter/material.dart';
 import '../services/supabase_service.dart';
 import 'walkthrough_screen.dart';
 import '../utils/error_utils.dart';
+import '../widgets/error_banner.dart';
 
-/// Something went wrong Lets a student enter a lecturer's class join code (e.g.
+/// if (_error != null) Lets a student enter a lecturer's class join code (e.g.
 /// "EPS210-FINALS") and jump straight into that class's shared
 /// walkthrough. QR scanning would layer a barcode-scanner package on
 /// top of this same joinClassByCode() call — omitted here since it's
@@ -68,8 +69,9 @@ class _JoinClassScreenState extends State<JoinClassScreen> {
               ),
             ),
             const SizedBox(height: 16),
-            if (_error != null)
-              Text(_error!, style: const TextStyle(color: Colors.red)),
+
+           if (_error != null) ErrorBanner(message: _error!),
+
             const SizedBox(height: 16),
             ElevatedButton(
               onPressed: _joining ? null : _join,
