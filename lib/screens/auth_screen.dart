@@ -2,6 +2,7 @@ import 'package:flutter/material.dart';
 import 'package:supabase_flutter/supabase_flutter.dart';
 import '../utils/error_utils.dart';
 import '../widgets/error_banner.dart';
+
 /// Email/password auth. On successful signup, also creates the
 /// matching row in the public `users` table.
 class AuthScreen extends StatefulWidget {
@@ -56,11 +57,6 @@ class _AuthScreenState extends State<AuthScreen> {
       }
       // No navigation here — main.dart's auth-state listener handles it.
     } on AuthException catch (e) {
-      // Network failures during auth (e.g. no internet) actually
-      // throw a subtype of AuthException, not a plain generic
-      // exception — so they land here first, with the raw technical
-      // text sitting in e.message. Only genuine auth errors (wrong
-      // password, user not found, etc.) should show e.message as-is.
       if (e.message.contains('SocketException') ||
           e.message.contains('ClientException') ||
           e.message.contains('Failed host lookup')) {
@@ -100,7 +96,7 @@ class _AuthScreenState extends State<AuthScreen> {
               ),
               if (dialogError != null) ...[
                 const SizedBox(height: 8),
-                Text(dialogError!, style: const TextStyle(color: Colors.red, fontSize: 13)),
+                ErrorBanner(message: dialogError!),
               ],
             ],
           ),
@@ -187,10 +183,12 @@ class _AuthScreenState extends State<AuthScreen> {
                     child: const Text('Forgot password?'),
                   ),
                 ),
-
               const SizedBox(height: 8),
-              if (_error != null) ErrorBanner(message: _error!),
-              
+              if (_error != null)
+                Padding(
+                  padding: const EdgeInsets.only(bottom: 12),
+                  child: ErrorBanner(message: _error!),
+                ),
               ElevatedButton(
                 onPressed: _loading ? null : _submit,
                 child: _loading

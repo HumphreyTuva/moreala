@@ -11,20 +11,24 @@ import 'capture_screen.dart';
 
 /// The core Matterport-style walkthrough screen.
 ///
-/// This version fixes the "abrupt cut / black screen / spinner" issue
-/// flagged in ECO-02: rather than kicking off a fresh network fetch
-/// the moment the student taps an arrow, every neighboring stop's
-/// image is pre-fetched into local disk cache the moment the student
-/// ARRIVES at a stop — while they're looking at it, not after they've
-/// already tapped to leave. By the time they tap forward/back, the
-/// target image is (usually) already on disk, so AnimatedSwitcher can
+/// Fixes the "abrupt cut / black screen / spinner" issue flagged in
+/// ECO-02: rather than kicking off a fresh network fetch the moment
+/// the student taps an arrow, every neighboring stop's image is
+/// pre-fetched into local disk cache the moment the student ARRIVES
+/// at a stop — while they're looking at it, not after they've already
+/// tapped to leave. By the time they tap forward/back, the target
+/// image is (usually) already on disk, so AnimatedSwitcher can
 /// perform a real crossfade between two already-loaded images instead
 /// of fading around a loading spinner.
 ///
-///GestureDetector First-ever visit to a stop (nothing pre-fetched yet, e.g. right
-/// after opening the walkthrough for the very first time) still shows
-/// a brief loading state — that's unavoidable without the file
-/// already existing, but it should be the rare case, not the norm.
+/// First-ever visit to a stop (nothing pre-fetched yet) still shows a
+/// brief loading state — unavoidable without the file already
+/// existing, but it should be the rare case, not the norm.
+///
+/// Tap-to-Advance: tapping the photo zooms IN toward exactly where
+/// you tapped, then crossfades to the next stop — "stepping toward
+/// what you tapped," matching ECO-02's described focal-point zoom,
+/// rather than a generic forward jump.
 class WalkthroughScreen extends StatefulWidget {
   final String modelId;
   const WalkthroughScreen({super.key, required this.modelId});
@@ -33,7 +37,8 @@ class WalkthroughScreen extends StatefulWidget {
   State<WalkthroughScreen> createState() => _WalkthroughScreenState();
 }
 
-class _WalkthroughScreenState extends State<WalkthroughScreen> {
+class _WalkthroughScreenState extends State<WalkthroughScreen>
+    with SingleTickerProviderStateMixin {
   final _supabase = SupabaseService();
   final _cache = LocalCacheService();
 
@@ -45,15 +50,29 @@ class _WalkthroughScreenState extends State<WalkthroughScreen> {
   bool _loading = true;
 
   // cacheKey ("<photoPointId>_<direction>") -> resolved local File,
-  // once downloaded. AnimatedSwitcher looks this map up directly on
-  // build; if the key isn't here yet, a lightweight loading state
-  // shows instead while _resolveAndCache fetches it in the background.
+  // once downloaded. Looked up directly on build; if the key isn't
+  // here yet, a lightweight loading state shows instead while
+  // _resolveAndCache fetches it in the background.
   final Map<String, File> _resolvedFiles = {};
+
+  // Tap-to-Advance zoom state.
+  late final AnimationController _zoomController;
+  Alignment _tapAlignment = Alignment.center;
 
   @override
   void initState() {
     super.initState();
+    _zoomController = AnimationController(
+      vsync: this,
+      duration: const Duration(milliseconds: 220),
+    );
     _load();
+  }
+
+  @override
+  void dispose() {
+    _zoomController.dispose();
+    super.dispose();
   }
 
   Future<void> _load() async {
@@ -108,7 +127,7 @@ class _WalkthroughScreenState extends State<WalkthroughScreen> {
     } catch (_) {
       // Leave unresolved — the loading placeholder stays up and a
       // retry happens naturally next time this stop/direction is
-      // requested (e.g. the student navigates away and back).
+      // requested.
     }
   }
 
@@ -116,8 +135,7 @@ class _WalkthroughScreenState extends State<WalkthroughScreen> {
   /// three directions AND the forward image of whichever stops are
   /// reachable from here — next/prev on the main line, plus any
   /// branch destinations. This is what makes the NEXT navigation feel
-  /// instant: the image is very likely already sitting on disk by the
-  /// time the student taps an arrow.
+  /// instant.
   void _prefetchCurrentAndNeighbors() {
     final current = _current;
     _resolveAndCache(current, LookDirection.forward);
@@ -188,6 +206,21 @@ class _WalkthroughScreenState extends State<WalkthroughScreen> {
     _loadPinsForCurrent();
     _loadBranchesForCurrent();
     _prefetchCurrentAndNeighbors();
+  }
+
+  /// Converts the tapped pixel position into an Alignment (-1..1 on
+  /// each axis) so the zoom is centered on exactly that spot, plays
+  /// the zoom, advances to the next stop, then resets for the next tap.
+  Future<void> _handleTapToAdvance(Offset localPosition, Size photoSize) async {
+    setState(() {
+      _tapAlignment = Alignment(
+        (localPosition.dx / photoSize.width) * 2 - 1,
+        (localPosition.dy / photoSize.height) * 2 - 1,
+      );
+    });
+    await _zoomController.forward(from: 0);
+    _moveForward();
+    _zoomController.value = 0;
   }
 
   void _lookLeft() => setState(() => _direction = LookDirection.left);
@@ -272,9 +305,8 @@ class _WalkthroughScreenState extends State<WalkthroughScreen> {
     final cacheKey = _cacheKeyFor(_current, _direction);
     final resolvedFile = _resolvedFiles[cacheKey];
     if (resolvedFile == null) {
-      // Not cached yet — kick off the fetch (idempotent, safe to call
-      // repeatedly) and show a lightweight loading state in the
-      // meantime rather than blocking the whole screen.
+      // Not cached yet — kick off the fetch (idempotent) and show a
+      // lightweight loading state in the meantime.
       _resolveAndCache(_current, _direction);
     }
 
@@ -286,50 +318,58 @@ class _WalkthroughScreenState extends State<WalkthroughScreen> {
             final photoSize = Size(constraints.maxWidth, constraints.maxHeight);
             return Stack(
               children: [
-
-              GestureDetector(
+                GestureDetector(
                   onLongPressStart: (details) =>
                       _onPhotoLongPress(details.localPosition, photoSize),
-                  // Tap-to-Advance: tapping the photo itself (not a
-                  // pin, which has its own GestureDetector on top and
-                  // takes priority for hits on it) walks forward — a
-                  // natural "step toward what I'm looking at" gesture,
-                  // alongside the existing arrow controls.
-                  onTap: _current.linkedNextId != null ? _moveForward : null,
-                  child: AnimatedSwitcher(
-
-                    duration: const Duration(milliseconds: 250),
-                    switchInCurve: Curves.easeOutQuad,
-                    switchOutCurve: Curves.easeInQuad,
-                    transitionBuilder: (child, animation) {
-                      // Subtle forward scale (0.92 -> 1.0) simulates
-                      // walking momentum, per the spec's transition
-                      // requirement — real crossfade between two
-                      // already-loaded images now that pre-caching
-                      // means the target is usually already on disk.
-                      final scaleAnimation = Tween(begin: 0.92, end: 1.0).animate(animation);
-                      return FadeTransition(
-                        opacity: animation,
-                        child: ScaleTransition(scale: scaleAnimation, child: child),
+                  // Tap-to-Advance: zooms toward the exact tapped
+                  // point, then crosses to the next stop.
+                  onTapUp: _current.linkedNextId != null
+                      ? (details) => _handleTapToAdvance(details.localPosition, photoSize)
+                      : null,
+                  child: AnimatedBuilder(
+                    animation: _zoomController,
+                    builder: (context, child) {
+                      final scale = 1.0 + (_zoomController.value * 0.35);
+                      return Transform(
+                        alignment: _tapAlignment,
+                        transform: Matrix4.identity()..scale(scale),
+                        child: child,
                       );
                     },
-                    child: resolvedFile != null
-                        ? Image.file(
-                            resolvedFile,
-                            key: ValueKey(cacheKey),
-                            fit: BoxFit.cover,
-                            width: double.infinity,
-                            height: double.infinity,
-                          )
-                        : Container(
-                            key: ValueKey('loading_$cacheKey'),
-                            color: Colors.black,
-                            width: double.infinity,
-                            height: double.infinity,
-                            child: const Center(
-                              child: CircularProgressIndicator(color: Colors.white54),
+                    child: AnimatedSwitcher(
+                      duration: const Duration(milliseconds: 250),
+                      switchInCurve: Curves.easeOutQuad,
+                      switchOutCurve: Curves.easeInQuad,
+                      transitionBuilder: (child, animation) {
+                        // Subtle forward scale (0.92 -> 1.0) simulates
+                        // walking momentum — real crossfade between
+                        // two already-loaded images now that
+                        // pre-caching means the target is usually
+                        // already on disk.
+                        final scaleAnimation = Tween(begin: 0.92, end: 1.0).animate(animation);
+                        return FadeTransition(
+                          opacity: animation,
+                          child: ScaleTransition(scale: scaleAnimation, child: child),
+                        );
+                      },
+                      child: resolvedFile != null
+                          ? Image.file(
+                              resolvedFile,
+                              key: ValueKey(cacheKey),
+                              fit: BoxFit.cover,
+                              width: double.infinity,
+                              height: double.infinity,
+                            )
+                          : Container(
+                              key: ValueKey('loading_$cacheKey'),
+                              color: Colors.black,
+                              width: double.infinity,
+                              height: double.infinity,
+                              child: const Center(
+                                child: CircularProgressIndicator(color: Colors.white54),
+                              ),
                             ),
-                          ),
+                    ),
                   ),
                 ),
 
@@ -360,10 +400,6 @@ class _WalkthroughScreenState extends State<WalkthroughScreen> {
                     ),
                   ),
 
-                // Discoverability hint for pins, addressing the "pins
-                // feature is missing" confusion — it wasn't missing,
-                // it just had no visible way to know long-press
-                // creates one. Shows once per stop, briefly.
                 if (_pins.isEmpty)
                   Positioned(
                     bottom: 180,
