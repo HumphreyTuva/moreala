@@ -25,10 +25,9 @@ import 'capture_screen.dart';
 /// brief loading state — unavoidable without the file already
 /// existing, but it should be the rare case, not the norm.
 ///
-/// Tap-to-Advance: tapping the photo zooms IN toward exactly where
-/// you tapped, then crossfades to the next stop — "stepping toward
-/// what you tapped," matching ECO-02's described focal-point zoom,
-/// rather than a generic forward jump.
+/// Double-tap zoom: the first double-tap zooms in toward the tapped
+/// point and stays zoomed; a second double-tap advances to the next
+/// stop. Works on every photo, including the first stop.
 class WalkthroughScreen extends StatefulWidget {
   final String modelId;
   const WalkthroughScreen({super.key, required this.modelId});
@@ -55,16 +54,21 @@ class _WalkthroughScreenState extends State<WalkthroughScreen>
   // _resolveAndCache fetches it in the background.
   final Map<String, File> _resolvedFiles = {};
 
-  // Tap-to-Advance zoom state.
+  // Double-tap zoom state. First double-tap zooms in toward the tapped
+  // point and stays zoomed; a second double-tap advances to the next
+  // stop (or zooms back out if there is no next stop).
+  static const double _maxZoom = 2.5;
   late final AnimationController _zoomController;
   Alignment _tapAlignment = Alignment.center;
+  Offset _doubleTapPosition = Offset.zero;
+  bool _zoomedIn = false;
 
   @override
   void initState() {
     super.initState();
     _zoomController = AnimationController(
       vsync: this,
-      duration: const Duration(milliseconds: 220),
+      duration: const Duration(milliseconds: 280),
     );
     _load();
   }
@@ -99,6 +103,15 @@ class _WalkthroughScreenState extends State<WalkthroughScreen>
   }
 
   PhotoPoint get _current => _points[_currentIndex];
+
+  double get _zoomScale =>
+      1.0 + Curves.easeOut.transform(_zoomController.value) * (_maxZoom - 1.0);
+
+  void _resetZoom() {
+    _zoomController.stop();
+    _zoomController.value = 0;
+    _zoomedIn = false;
+  }
 
   String _cacheKeyFor(PhotoPoint point, LookDirection dir) => '${point.id}_${dir.name}';
 
@@ -158,6 +171,7 @@ class _WalkthroughScreenState extends State<WalkthroughScreen>
   Future<void> _reloadAndReturnTo(String photoPointId) async {
     final points = await _supabase.getPhotoPoints(widget.modelId);
     final idx = points.indexWhere((p) => p.id == photoPointId);
+    _resetZoom();
     setState(() {
       _points = points;
       _currentIndex = idx == -1 ? 0 : idx;
@@ -174,6 +188,7 @@ class _WalkthroughScreenState extends State<WalkthroughScreen>
     if (_current.linkedNextId == null) return;
     final nextIdx = _points.indexWhere((p) => p.id == _current.linkedNextId);
     if (nextIdx == -1) return;
+    _resetZoom();
     setState(() {
       _currentIndex = nextIdx;
       _direction = LookDirection.forward;
@@ -187,6 +202,7 @@ class _WalkthroughScreenState extends State<WalkthroughScreen>
     if (_current.linkedPrevId == null) return;
     final prevIdx = _points.indexWhere((p) => p.id == _current.linkedPrevId);
     if (prevIdx == -1) return;
+    _resetZoom();
     setState(() {
       _currentIndex = prevIdx;
       _direction = LookDirection.forward;
@@ -199,6 +215,7 @@ class _WalkthroughScreenState extends State<WalkthroughScreen>
   void _jumpToBranch(String toPhotoPointId) {
     final idx = _points.indexWhere((p) => p.id == toPhotoPointId);
     if (idx == -1) return;
+    _resetZoom();
     setState(() {
       _currentIndex = idx;
       _direction = LookDirection.forward;
@@ -208,23 +225,42 @@ class _WalkthroughScreenState extends State<WalkthroughScreen>
     _prefetchCurrentAndNeighbors();
   }
 
-  /// Converts the tapped pixel position into an Alignment (-1..1 on
-  /// each axis) so the zoom is centered on exactly that spot, plays
-  /// the zoom, advances to the next stop, then resets for the next tap.
-  Future<void> _handleTapToAdvance(Offset localPosition, Size photoSize) async {
-    setState(() {
-      _tapAlignment = Alignment(
-        (localPosition.dx / photoSize.width) * 2 - 1,
-        (localPosition.dy / photoSize.height) * 2 - 1,
-      );
-    });
-    await _zoomController.forward(from: 0);
-    _moveForward();
-    _zoomController.value = 0;
+  /// Double-tap behavior:
+  ///  - not zoomed: zoom in toward the tapped point and stay zoomed.
+  ///  - already zoomed: advance to the next stop, or zoom back out if
+  ///    this is the last stop.
+  Future<void> _handleDoubleTap(Size photoSize) async {
+    if (_zoomController.isAnimating) return;
+
+    if (!_zoomedIn) {
+      setState(() {
+        _tapAlignment = Alignment(
+          ((_doubleTapPosition.dx / photoSize.width) * 2 - 1).clamp(-1.0, 1.0),
+          ((_doubleTapPosition.dy / photoSize.height) * 2 - 1).clamp(-1.0, 1.0),
+        );
+        _zoomedIn = true;
+      });
+      await _zoomController.forward();
+      return;
+    }
+
+    if (_current.linkedNextId != null) {
+      _moveForward(); // also resets the zoom
+    } else {
+      _zoomedIn = false;
+      await _zoomController.reverse();
+    }
   }
 
-  void _lookLeft() => setState(() => _direction = LookDirection.left);
-  void _lookRight() => setState(() => _direction = LookDirection.right);
+  void _lookLeft() {
+    _resetZoom();
+    setState(() => _direction = LookDirection.left);
+  }
+
+  void _lookRight() {
+    _resetZoom();
+    setState(() => _direction = LookDirection.right);
+  }
 
   void _onPinTapped(SpatialPin pin) {
     showModalBottomSheet(
@@ -236,8 +272,15 @@ class _WalkthroughScreenState extends State<WalkthroughScreen>
   }
 
   Future<void> _onPhotoLongPress(Offset localPosition, Size photoSize) async {
-    final x = localPosition.dx / photoSize.width;
-    final y = localPosition.dy / photoSize.height;
+    // Undo the zoom transform so the pin lands on the right spot of
+    // the photo even when zoomed in.
+    final scale = _zoomScale;
+    final ax = (_tapAlignment.x + 1) / 2 * photoSize.width;
+    final ay = (_tapAlignment.y + 1) / 2 * photoSize.height;
+    final px = ax + (localPosition.dx - ax) / scale;
+    final py = ay + (localPosition.dy - ay) / scale;
+    final x = px / photoSize.width;
+    final y = py / photoSize.height;
     try {
       final newPin = await _supabase.createPin(
         photoPointId: _current.id,
@@ -319,21 +362,35 @@ class _WalkthroughScreenState extends State<WalkthroughScreen>
             return Stack(
               children: [
                 GestureDetector(
+                  behavior: HitTestBehavior.opaque,
                   onLongPressStart: (details) =>
                       _onPhotoLongPress(details.localPosition, photoSize),
-                  // Tap-to-Advance: zooms toward the exact tapped
-                  // point, then crosses to the next stop.
-                  onTapUp: _current.linkedNextId != null
-                      ? (details) => _handleTapToAdvance(details.localPosition, photoSize)
-                      : null,
+                  onDoubleTapDown: (details) =>
+                      _doubleTapPosition = details.localPosition,
+                  onDoubleTap: () => _handleDoubleTap(photoSize),
                   child: AnimatedBuilder(
                     animation: _zoomController,
                     builder: (context, child) {
-                      final scale = 1.0 + (_zoomController.value * 0.35);
-                      return Transform(
+                      final scale = _zoomScale;
+                      // Photo and pins zoom together so pins stay on
+                      // the objects they mark; pins keep their size.
+                      return Transform.scale(
+                        scale: scale,
                         alignment: _tapAlignment,
-                        transform: Matrix4.identity()..scale(scale),
-                        child: child,
+                        child: Stack(
+                          fit: StackFit.expand,
+                          children: [
+                            child!,
+                            ..._pins.map((pin) => Positioned(
+                                  left: pin.x * photoSize.width - 20,
+                                  top: pin.y * photoSize.height - 20,
+                                  child: Transform.scale(
+                                    scale: 1 / scale,
+                                    child: PinMarker(onTap: () => _onPinTapped(pin)),
+                                  ),
+                                )),
+                          ],
+                        ),
                       );
                     },
                     child: AnimatedSwitcher(
@@ -341,11 +398,6 @@ class _WalkthroughScreenState extends State<WalkthroughScreen>
                       switchInCurve: Curves.easeOutQuad,
                       switchOutCurve: Curves.easeInQuad,
                       transitionBuilder: (child, animation) {
-                        // Subtle forward scale (0.92 -> 1.0) simulates
-                        // walking momentum — real crossfade between
-                        // two already-loaded images now that
-                        // pre-caching means the target is usually
-                        // already on disk.
                         final scaleAnimation = Tween(begin: 0.92, end: 1.0).animate(animation);
                         return FadeTransition(
                           opacity: animation,
@@ -372,12 +424,6 @@ class _WalkthroughScreenState extends State<WalkthroughScreen>
                     ),
                   ),
                 ),
-
-                ..._pins.map((pin) => Positioned(
-                      left: pin.x * photoSize.width - 20,
-                      top: pin.y * photoSize.height - 20,
-                      child: PinMarker(onTap: () => _onPinTapped(pin)),
-                    )),
 
                 if (_branches.isNotEmpty)
                   Positioned(
@@ -413,7 +459,7 @@ class _WalkthroughScreenState extends State<WalkthroughScreen>
                           borderRadius: BorderRadius.circular(20),
                         ),
                         child: const Text(
-                          'Long-press anywhere on the photo to add a note',
+                          'Double-tap to zoom · double-tap again for next stop · long-press to add a note',
                           style: TextStyle(color: Colors.white70, fontSize: 12),
                         ),
                       ),
